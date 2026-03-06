@@ -283,6 +283,90 @@ tail -F checkpoints/1b_final/nohup.out
 
 ---
 
+## 적용 기술 상세
+
+이 프로젝트에 적용된 핵심 기술들을 빠짐없이 정리합니다.
+
+### SSM / Mamba-2 관련
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **Triton Chunked SSD 커널** | `mamba_ssm`의 `mamba_chunk_scan_combined` — Triton으로 작성된 chunked Structured State Space Duality 커널. 메모리 효율적인 O(N) 시퀀스 처리 | `model/mamba_block.py:333` |
+| **causal_conv1d** | 퓨즈드 CUDA 커널로 causal depthwise conv1d + SiLU 활성화를 단일 커널에서 처리 | `model/mamba_block.py:312` |
+| **Selective Scan (순수 PyTorch 폴백)** | CUDA 커널 미설치 시를 위한 순수 PyTorch selective scan 구현. 청크 기반으로 메모리 효율성 확보 | `model/mamba_block.py:54` |
+| **Multi-head SSM** | 64개 헤드를 8개 그룹으로 나눈 grouped SSM. Mamba-2의 핵심 구조 | `mamba_n_groups=8`, `mamba_head_dim=64` |
+| **A_log 파라미터화** | 대각 감쇠 행렬 A를 log 공간에서 학습하여 수치 안정성 보장. `exp(-exp(A_log) * dt)` | `model/mamba_block.py:219` |
+| **dt_bias 초기화** | 시간 스텝 바이어스를 `log(uniform(0.001, 0.1))`로 초기화하여 학습 초기 안정성 확보 | `model/mamba_block.py:227` |
+| **Mamba SwiGLU FFN** | Nemotron-H 스타일로 Mamba 블록 내부에 SwiGLU FFN 추가. `mamba_d_ffn=0`이면 비활성 (하위 호환) | `model/mamba_block.py` |
+
+### Transformer / Attention 관련
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **FlashAttention-2** | Tri Dao의 IO-aware 어텐션 알고리즘. O(N)메모리로 정확한 어텐션 계산 | `model/attention.py:211` |
+| **GQA (Grouped Query Attention)** | 16개 쿼리 헤드, 4개 KV 헤드 (4:1 비율). KV 캐시 메모리 75% 절감 | `model/attention.py:77` |
+| **RoPE (Rotary Positional Embedding)** | 회전 위치 임베딩으로 상대적 위치 정보 인코딩. `rope_theta=500000` | `model/layers.py:54`, `model/attention.py:39` |
+| **RMSNorm** | LayerNorm 대비 연산량 감소 (mean 계산 불필요). Pre-norm 구조 | `model/layers.py:27` |
+| **SwiGLU FFN** | Shazeer(2020)의 SwiGLU 게이트 활성화. `gate * silu(up)` 구조 | `model/layers.py:109` |
+
+### 정밀도 / 양자화
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **FP8 (MXFP8BlockScaling)** | TransformerEngine의 Microscaling FP8. B200의 FP8 텐서 코어를 활용하여 BF16 대비 ~2배 처리량 | `train/trainer.py:163` |
+| **fp8_autocast** | TE 모듈(te.Linear)만 FP8로 연산, 나머지는 BF16 유지하는 하이브리드 정밀도 | `train/trainer.py:470` |
+| **BF16 autocast** | `torch.autocast(dtype=bfloat16)` — 순수 PyTorch 레이어(Mamba)는 BF16으로 자동 캐스팅 | `train/trainer.py:467` |
+| **te.Linear (FP8 Linear)** | Attention 레이어의 QKV/Output 프로젝션에 TransformerEngine FP8 Linear 적용 | `model/attention.py:103` |
+| **FP8 정렬 검증** | `d_model`, `d_ffn`, `mamba_d_ffn` 모두 16의 배수인지 `__post_init__`에서 검증 | `model/config.py:120` |
+
+### 손실 함수 / 메모리 최적화
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **Chunked Cross-Entropy** | 전체 logits (B×T×V)를 한번에 계산하지 않고 청크 단위로 분할. 64K 어휘에서 logits 메모리 1/8로 절감 | `model/transformer.py:232` |
+| **Gradient Accumulation + no_sync** | DDP에서 accumulation step 동안 `model.no_sync()`로 불필요한 allreduce 방지 | `train/trainer.py:243` |
+| **gradient_as_bucket_view** | DDP의 gradient 버퍼를 NCCL 통신 버킷으로 직접 사용. 메모리 복사 제거 (zero-copy) | `train/pretrain.py:323` |
+
+### 분산 학습 / 하드웨어 최적화
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **DDP (DistributedDataParallel)** | 7× B200 GPU 간 데이터 병렬 학습. NCCL 백엔드 | `train/pretrain.py:317` |
+| **NUMA 어피니티** | GPU 0-3 → NUMA 노드 0 (코어 0-35), GPU 4-6 → NUMA 노드 1 (코어 36-71). 메모리 접근 지연 3.2배 감소 | `train/pretrain.py:256` |
+| **DistributedSampler** | 데이터를 GPU 간 균등 분배하여 중복 학습 방지 | `train/pretrain.py:335` |
+| **expandable_segments** | `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` — CUDA 메모리 단편화 방지 | 환경 변수 |
+
+### 데이터 파이프라인
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **np.memmap** | 학습 데이터를 메모리 매핑하여 디스크에서 직접 읽기. 82GB 데이터를 RAM에 전부 매핑 | `data/dataset.py:38` |
+| **MADV_RANDOM** | 랜덤 액세스 패턴을 커널에 알려 불필요한 read-ahead 비활성화 | `data/dataset.py:95` |
+| **MADV_WILLNEED** | 비동기적으로 페이지를 페이지 캐시에 프리폴트 (prefault) | `data/dataset.py:96` |
+| **persistent_workers** | DataLoader 워커를 에포크 간 유지. 워커 재생성 오버헤드 제거 | `train/pretrain.py:355` |
+| **pin_memory** | CPU→GPU 전송을 위한 페이지 고정 메모리. DMA 전송 가속 | `train/pretrain.py:352` |
+| **prefetch_factor=4** | 워커당 4배치를 미리 로드하여 GPU 대기 시간 최소화 | `train/pretrain.py:354` |
+| **6 워커/GPU** | 6×7=42 워커, 72코어 CPU 예산 내에서 OMP_NUM_THREADS=4와 균형 | `train/pretrain.py:351` |
+
+### 학습 안정성 / 스케줄링
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **Cosine LR Schedule + 선형 워밍업** | 워밍업 후 cosine 감쇠로 학습률 조절. `min_lr_ratio=0.1` (최종 lr = 3e-5) | `train/utils.py:35` |
+| **AdamW (weight_decay 선택적 적용)** | bias, RMSNorm, A_log, D, dt_bias 파라미터는 weight decay에서 제외 | `train/pretrain.py:203` |
+| **Gradient Clipping (max_norm=1.0)** | L2 norm 기반 기울기 클리핑. Mamba의 기울기 스파이크 방지 | `train/trainer.py:280` |
+| **NaN 감지 + 긴급 체크포인트** | 학습 중 NaN/Inf 감지 시 즉시 체크포인트 저장 후 경고 | `model/mamba_block.py:349` |
+| **자동 재시작 래퍼** | 크래시 시 최신 체크포인트에서 자동 재시작. 포트 자동 변경 (EADDRINUSE 방지) | `train_1b_resilient.sh` |
+
+### 토크나이저
+
+| 기술 | 설명 | 적용 위치 |
+|------|------|-----------|
+| **SentencePiece BPE** | 64K 어휘의 Byte-Pair Encoding. 한국어+영어+코드+수학 혼합 학습 | `tokenizer/` |
+| **HuggingFace 호환 변환** | SentencePiece 모델을 HF tokenizer 형식으로 변환 | `tokenizer/convert_sp_to_hf.py` |
+
+---
+
 ## 학습 데이터
 
 | 항목 | 값 |
