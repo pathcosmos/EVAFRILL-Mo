@@ -1,0 +1,41 @@
+# Korean LLM 1B — SFT (Supervised Fine-Tuning) 설정
+#
+# Base model: korean_1b_fp8_run1/checkpoint-0034000 (1.19B params, 34k pretrain steps)
+# SFT 목표: instruction following + 반복 퇴화 완화 + 생성 품질 향상
+#
+# 실행: bash scripts/launch_sft.sh
+
+model:
+  vocab_size: 64000
+  d_model: 2048
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4
+  d_ffn: 5472
+  max_seq_len: 4096
+  rope_theta: 500000.0
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+  use_fp8: true
+
+train:
+  max_steps: 5000          # SFT: 수천 steps면 충분 (pretrain 34k 대비 ~10%)
+  batch_size: 4            # per GPU (SFT는 seq가 다양하므로 작게)
+  grad_accum_steps: 2      # eff_batch: 4 × 8GPU × 2 × 4096 = 262,144 tok/step
+  lr: 2.0e-5               # pretrain의 1/10 (catastrophic forgetting 방지)
+  weight_decay: 0.01       # pretrain 0.1보다 약하게
+  warmup_steps: 150        # 3000 steps의 3.3%
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 500
+  eval_interval: 100
+  use_amp: false           # FP8 사용 시 불필요
+  compile_model: false
+  fp8_amax_history_len: 16
+  fp8_amax_compute_algo: "max"
+  fp8_format: "MXFP8"
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

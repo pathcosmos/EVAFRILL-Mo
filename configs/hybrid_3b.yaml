@@ -1,0 +1,56 @@
+# FRANKENSTALLM-H 3B: Hybrid Mamba-2 + Transformer
+#
+# [설계 근거 — 2026-03-05]
+#   - 아키텍처: Nemotron-H 8B Dense 참고, 3B 스케일 적용
+#   - 40 layers: 37 Mamba-2 + 3 Attention (layer 13, 26, 39)
+#   - 파라미터: ~2.9B (embedding 포함)
+#   - 데이터: 3b_train.bin (기존 Pure Transformer 동일 데이터)
+#   - lr=2e-4: Mamba-2 논문 참고, Transformer보다 약간 높음
+#   - Attention 3개: 초반(13), 중반(26), 후반(39) 균등 배치
+#   - Mamba 장점: O(n) 시퀀스 처리, 추론 시 constant memory
+#
+# 실행: bash scripts/launch_hybrid_3b.sh
+model:
+  vocab_size: 64000
+  d_model: 3072
+  n_layers: 40
+  n_heads: 24
+  n_kv_heads: 8
+  d_ffn: 9216
+  max_seq_len: 4096
+  rope_theta: 500000.0
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+  use_fp8: true
+  # Hybrid settings
+  use_hybrid: true
+  hybrid_pattern: "M M M M M M M M M M M M M A M M M M M M M M M M M M A M M M M M M M M M M M M A"
+  mamba_d_state: 128
+  mamba_head_dim: 64
+  mamba_expand: 2
+  mamba_conv_kernel: 4
+  mamba_n_groups: 8
+  mamba_d_ffn: 4608
+  mamba_chunk_size: 256
+
+train:
+  max_steps: 57000
+  batch_size: 4
+  grad_accum_steps: 8
+  lr: 2e-4
+  weight_decay: 0.1
+  warmup_steps: 2000
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 2000
+  eval_interval: 500
+  use_amp: false
+  compile_model: false
+  fp8_amax_history_len: 16
+  fp8_amax_compute_algo: "max"
+  fp8_format: "MXFP8"
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

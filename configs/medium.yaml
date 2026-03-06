@@ -1,0 +1,30 @@
+# Medium LLM ~350M parameters (GPT-2 medium equivalent)
+model:
+  vocab_size: 32000
+  d_model: 1024
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 8       # GQA: 2 KV heads per Q group
+  max_seq_len: 4096
+  rope_theta: 500000.0  # extended RoPE for longer context
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+
+train:
+  max_steps: 200000
+  batch_size: 4
+  grad_accum_steps: 8   # effective batch = 4 * 8 GPUs * 8 = 256
+  lr: 2.0e-4
+  weight_decay: 0.1
+  warmup_steps: 4000
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 1000
+  eval_interval: 500
+  use_amp: true
+  compile_model: false
+
+tokenizer:
+  vocab_size: 32000
+  type: bpe

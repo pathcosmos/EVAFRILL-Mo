@@ -1,0 +1,48 @@
+# Korean LLM 1B parameters — FP8 변형 (B200 TransformerEngine 네이티브)
+#
+# [최적화 근거 — 2026-02-25]
+#   - 데이터: korean_train.bin 8.91B tokens
+#   - max_steps 34000 = 4 에포크 (Muennighoff 2023: 4에포크 초과 시 val loss 상승)
+#     * 기존 200k steps = 23.5 에포크 → 오버피팅 위험, compute 낭비
+#   - lr=2e-4: GPT-3 1.3B 기준과 정확히 일치 (변경 없음)
+#   - eff_batch=1.05M: GPT-3 1.3B 기준과 일치 (변경 없음)
+#   - warmup 2000 = 34k의 5.9% (기존 4000 = 11.8%로 과도했음)
+#   - save/eval 간격 단축: 34k steps 기준 더 촘촘한 체크포인트 필요
+#   - compile_model: false (TE 2.10 graph break 위험, 안정성 우선)
+#
+# 실행: bash scripts/launch_korean_1b.sh
+model:
+  vocab_size: 64000
+  d_model: 2048
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4          # GQA 4:1 (K/V 파라미터 75% 절감)
+  d_ffn: 5472            # 16배수 (FP8 alignment 충족)
+  max_seq_len: 4096
+  rope_theta: 500000.0
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+  use_fp8: true          # TransformerEngine MXFP8BlockScaling (B200 네이티브)
+
+train:
+  # 34k steps × 1,048,576 tok/step = 35.6B tokens = 4 에포크 (8.91B 데이터 기준)
+  max_steps: 34000
+  batch_size: 8          # per GPU: 8 × 4096 = 32,768 토큰 | VRAM 30.8% 사용 (192GB)
+  grad_accum_steps: 4    # eff_batch: 8 × 8GPU × 4 × 4096 = 1,048,576 tok/step
+  lr: 2.0e-4             # GPT-3 1.3B 기준 최적값과 정확히 일치
+  weight_decay: 0.1
+  warmup_steps: 2000     # 34k steps의 5.9% — 기존 4000은 11.8%로 과도
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 500     # 34k steps 기준 ~70 체크포인트 (기존 1000은 너무 듬성)
+  eval_interval: 200     # val loss 조기 이상 감지용
+  use_amp: false         # fp8_autocast가 대체 (torch.autocast 불필요)
+  compile_model: false   # TE 2.10 + DDP graph break 위험
+  fp8_amax_history_len: 16
+  fp8_amax_compute_algo: "max"
+  fp8_format: "MXFP8"   # B200 Blackwell 네이티브 블록 스케일링
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

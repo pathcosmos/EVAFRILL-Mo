@@ -1,0 +1,49 @@
+# Korean LLM 3B parameters — FP8 (B200 TransformerEngine MXFP8)
+#
+# [설계 근거 — 2026-02-27]
+#   - 아키텍처: LLaMA-3 3B 참고 (d=3072, 28L, 24H, GQA 8:1)
+#   - 파라미터: ~3.0B (embedding 포함)
+#   - 데이터: korean_train.bin 8.91B tokens → 최소 60B tokens (7 에포크)
+#   - Chinchilla optimal: 3B 모델 → 60B tokens, 실용적으로 100B 권장
+#   - lr=1.5e-4: LLaMA-3 3B 기준 (1B의 2e-4 대비 낮춤, μP scaling ~1/sqrt(3))
+#   - eff_batch=2M tokens: 3B 기준 GPT-3 scaling law 참고
+#   - 체크포인트: ~27GB/개, 2000 step 간격 → 최대 ~30개 = 810GB
+#   - 예상 학습 시간: 8×B200 FP8 기준 ~72-96시간 (60B tokens)
+#
+# 실행: bash scripts/launch_3b_pretrain.sh
+model:
+  vocab_size: 64000
+  d_model: 3072
+  n_layers: 28
+  n_heads: 24
+  n_kv_heads: 8          # GQA 3:1 (메모리 효율 + 품질 밸런스)
+  d_ffn: 8192            # ~2.67× d_model, 128배수 (FP8 alignment)
+  max_seq_len: 4096
+  rope_theta: 500000.0
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+  use_fp8: true
+
+train:
+  # Phase 1: 60B tokens (최소) = 57000 steps × 2^20 tok/step
+  # Phase 2: 100B tokens (권장) = 95000 steps
+  max_steps: 57000
+  batch_size: 5          # per GPU: 5 × 4096 = 20,480 토큰 (QKV fusion 후 ~161GB/183GB VRAM, 21GB 여유)
+  grad_accum_steps: 8    # eff_batch: 5 × 8GPU × 8 × 4096 = 1,310,720 tok/step (~1.3M)
+  lr: 1.5e-4             # LLaMA-3 3B 스케일, Chinchilla 참고
+  weight_decay: 0.1
+  warmup_steps: 2000     # 57k의 3.5%
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 2000    # 27GB/체크포인트 → 2000 step 간격 = ~28개 = 756GB
+  eval_interval: 500
+  use_amp: false
+  compile_model: false
+  fp8_amax_history_len: 16   # NOTE: MXFP8 format에서는 무시됨 (DelayedScaling 전용)
+  fp8_amax_compute_algo: "max"  # NOTE: MXFP8 format에서는 무시됨
+  fp8_format: "MXFP8"
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

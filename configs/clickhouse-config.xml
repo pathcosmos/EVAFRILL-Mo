@@ -1,0 +1,315 @@
+<?xml version="1.0"?>
+<!--
+  ClickHouse Server Configuration
+  =================================
+  Hardware: AMD EPYC 9365 36-Core (72 threads), 2.2 TB RAM, 2x NUMA nodes
+  Purpose : Data analytics for LLM training pipeline + factory sensor data (CRM project)
+  Generated: 2026-03-01
+-->
+<clickhouse>
+
+    <!-- =========================================================
+         Network / Listen
+         Listen on localhost only — GPU training node is local only
+    ========================================================= -->
+    <listen_host>127.0.0.1</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <interserver_http_port>9009</interserver_http_port>
+
+    <!-- =========================================================
+         Paths
+         Data on GPFS (20 TB, 18 TB free) for large datasets.
+         Tmp / logs on local /tmp to reduce GPFS small-file pressure.
+    ========================================================= -->
+    <path>/PROJECT/0325120031_A/ghong/taketimes/clickhouse-data/</path>
+    <tmp_path>/tmp/clickhouse-tmp/</tmp_path>
+
+    <!-- =========================================================
+         Logging
+    ========================================================= -->
+    <logger>
+        <level>information</level>
+        <log>/tmp/clickhouse/logs/clickhouse-server.log</log>
+        <errorlog>/tmp/clickhouse/logs/clickhouse-server.err.log</errorlog>
+        <!-- Rotate at 512 MB, keep 10 files -->
+        <size>536870912</size>
+        <count>10</count>
+    </logger>
+
+    <!-- =========================================================
+         Memory — server-level cap for all queries combined
+    ========================================================= -->
+    <max_server_memory_usage>536870912000</max_server_memory_usage>
+
+    <!-- =========================================================
+         CPU / Thread Pools (server-level settings)
+         Physical cores: 36 per socket, 72 total (2 NUMA nodes).
+         Reserve half for GPU training → 36 threads for ClickHouse.
+    ========================================================= -->
+    <background_pool_size>18</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <background_move_pool_size>4</background_move_pool_size>
+    <background_fetches_pool_size>4</background_fetches_pool_size>
+    <background_schedule_pool_size>8</background_schedule_pool_size>
+    <background_common_pool_size>8</background_common_pool_size>
+
+    <!-- =========================================================
+         Concurrency
+    ========================================================= -->
+    <max_concurrent_queries>100</max_concurrent_queries>
+    <max_waiting_queries>50</max_waiting_queries>
+
+    <!-- =========================================================
+         Caches
+         mark_cache    : 10 GB  — indexes for MergeTree parts
+         uncompressed  : 20 GB  — decompressed block cache
+         query_cache   : 2  GB  — optional query result cache
+         NUMA note: ClickHouse allocates via jemalloc with NUMA
+           awareness; no extra config needed beyond thread binding.
+    ========================================================= -->
+    <mark_cache_size>10737418240</mark_cache_size>
+    <uncompressed_cache_size>21474836480</uncompressed_cache_size>
+    <!-- Available from ClickHouse 23.x -->
+    <query_cache>
+        <max_size_in_bytes>2147483648</max_size_in_bytes>
+        <max_entries>1024</max_entries>
+        <max_entry_size_in_bytes>104857600</max_entry_size_in_bytes>
+        <max_entry_size_in_rows>30000000</max_entry_size_in_rows>
+    </query_cache>
+    <!-- Compiled expression cache -->
+    <compiled_expression_cache_size>134217728</compiled_expression_cache_size>
+    <compiled_expression_cache_elements_size>10000</compiled_expression_cache_elements_size>
+
+    <!-- =========================================================
+         I/O
+         GPFS is a parallel filesystem — large sequential reads are
+         efficient; use aggressive read-ahead and prefetch.
+         NVMe local disks can be used for tmp / intermediate data.
+    ========================================================= -->
+    <!-- MergeTree concurrent read settings moved to <profiles><default> -->
+    <!-- Async reads from object/POSIX storage -->
+    <asynchronous_metrics_update_period_s>60</asynchronous_metrics_update_period_s>
+
+    <!-- Async Insert settings moved to <profiles><default> below -->
+
+    <!-- =========================================================
+         MergeTree Storage Settings
+    ========================================================= -->
+    <merge_tree>
+        <!-- Bytes: prefer larger parts on GPFS to reduce metadata overhead -->
+        <max_bytes_to_merge_at_max_space_in_pool>161061273600</max_bytes_to_merge_at_max_space_in_pool>
+        <!-- Allow up to 300 parts per partition before slowing inserts -->
+        <parts_to_throw_insert>300</parts_to_throw_insert>
+        <parts_to_delay_insert>150</parts_to_delay_insert>
+        <!-- Use AVX-512 SIMD for sorting / hashing where available -->
+        <use_minimalistic_part_header_in_zookeeper>1</use_minimalistic_part_header_in_zookeeper>
+        <!-- Keep deleted data up to 8 hours before final cleanup -->
+        <old_parts_lifetime>28800</old_parts_lifetime>
+    </merge_tree>
+
+    <!-- =========================================================
+         Compression
+         LZ4 default (fast, AVX2/AVX-512 accelerated).
+         ZSTD level 3 for cold / archival tables — trade CPU for space.
+    ========================================================= -->
+    <compression>
+        <!-- Hot data: LZ4 -->
+        <case>
+            <min_part_size>1073741824</min_part_size>
+            <min_part_size_ratio>0.01</min_part_size_ratio>
+            <method>lz4</method>
+        </case>
+        <!-- Very large parts: ZSTD for better ratio -->
+        <case>
+            <min_part_size>10737418240</min_part_size>
+            <min_part_size_ratio>0.1</min_part_size_ratio>
+            <method>zstd</method>
+            <level>3</level>
+        </case>
+    </compression>
+
+    <!-- =========================================================
+         Users / Access Control
+         Single local user, no password (localhost-only listen).
+         See users.xml (or inline below) for quota/profile.
+    ========================================================= -->
+    <users>
+        <default>
+            <password></password>
+            <networks>
+                <ip>127.0.0.1/8</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <!-- Allow DDL from default user -->
+            <access_management>1</access_management>
+        </default>
+    </users>
+
+    <profiles>
+        <default>
+            <!-- Memory per query: 500 GB -->
+            <max_memory_usage>536870912000</max_memory_usage>
+            <max_bytes_before_external_group_by>483183820800</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>483183820800</max_bytes_before_external_sort>
+            <!-- Threads per query: half of 72 cores -->
+            <max_threads>36</max_threads>
+            <max_concurrent_queries_for_user>100</max_concurrent_queries_for_user>
+            <use_uncompressed_cache>1</use_uncompressed_cache>
+            <!-- O_DIRECT for large scans -->
+            <min_bytes_to_use_direct_io>10737418240</min_bytes_to_use_direct_io>
+            <!-- SIMD JSON parsing (AVX-512) -->
+            <input_format_parallel_parsing>1</input_format_parallel_parsing>
+            <output_format_parallel_formatting>1</output_format_parallel_formatting>
+            <!-- Async insert for sensor/CRM streaming -->
+            <async_insert>1</async_insert>
+            <async_insert_max_data_size>33554432</async_insert_max_data_size>
+            <async_insert_busy_timeout_ms>200</async_insert_busy_timeout_ms>
+            <async_insert_deduplicate>0</async_insert_deduplicate>
+            <wait_for_async_insert>1</wait_for_async_insert>
+            <wait_for_async_insert_timeout>5</wait_for_async_insert_timeout>
+            <!-- MergeTree concurrent read -->
+            <merge_tree_min_rows_for_concurrent_read>20000</merge_tree_min_rows_for_concurrent_read>
+            <merge_tree_min_bytes_for_concurrent_read>24117248</merge_tree_min_bytes_for_concurrent_read>
+        </default>
+    </profiles>
+
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
+
+    <!-- =========================================================
+         Distributed DDL (single-node — disable ZooKeeper dependency)
+    ========================================================= -->
+    <!-- No ZooKeeper configured; replicated tables use ReplicatedMergeTree
+         only if ZK is added later. Commenting out to avoid startup warnings.
+    <zookeeper>
+        <node>
+            <host>localhost</host>
+            <port>2181</port>
+        </node>
+    </zookeeper>
+    -->
+
+    <!-- =========================================================
+         Timezone
+    ========================================================= -->
+    <timezone>Asia/Seoul</timezone>
+
+    <!-- =========================================================
+         Query Log / System Tables
+         Keep 30 days of query history for pipeline debugging.
+    ========================================================= -->
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 30 DAY</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <max_size_rows>1048576</max_size_rows>
+    </query_log>
+
+    <query_thread_log>
+        <database>system</database>
+        <table>query_thread_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 7 DAY</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </query_thread_log>
+
+    <part_log>
+        <database>system</database>
+        <table>part_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 14 DAY</ttl>
+        <flush_interval_milliseconds>5000</flush_interval_milliseconds>
+    </part_log>
+
+    <trace_log>
+        <database>system</database>
+        <table>trace_log</table>
+        <partition_by>toYYYYMM(event_date)</partition_by>
+        <ttl>event_date + INTERVAL 7 DAY</ttl>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+    </trace_log>
+
+    <metric_log>
+        <database>system</database>
+        <table>metric_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <collect_interval_milliseconds>1000</collect_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY</ttl>
+    </metric_log>
+
+    <asynchronous_metric_log>
+        <database>system</database>
+        <table>asynchronous_metric_log</table>
+        <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY</ttl>
+    </asynchronous_metric_log>
+
+    <!-- =========================================================
+         Crash Handler
+    ========================================================= -->
+    <core_dump>
+        <size_limit>0</size_limit>
+    </core_dump>
+
+    <!-- =========================================================
+         Keeper (built-in, single-node mode — replaces ZooKeeper
+         if you want ReplicatedMergeTree without external ZK).
+         Uncomment if needed.
+    ========================================================= -->
+    <!--
+    <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id>1</server_id>
+        <log_storage_path>/PROJECT/0325120031_A/ghong/taketimes/clickhouse-data/keeper/logs</log_storage_path>
+        <snapshot_storage_path>/PROJECT/0325120031_A/ghong/taketimes/clickhouse-data/keeper/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <operation_timeout_ms>10000</operation_timeout_ms>
+            <session_timeout_ms>30000</session_timeout_ms>
+            <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+            <server>
+                <id>1</id>
+                <hostname>localhost</hostname>
+                <port>9444</port>
+            </server>
+        </raft_configuration>
+    </keeper_server>
+    -->
+
+    <!-- =========================================================
+         AVX-512 / SIMD hints
+         ClickHouse auto-detects CPUID at runtime; these flags are
+         informational comments — no XML knobs needed.
+         Detected: avx512f, avx512bw, avx512vl, avx512_vnni, avx512_bf16
+         Used in: LZ4 compression, hash aggregation, sorting, filters.
+    ========================================================= -->
+
+    <!-- =========================================================
+         Miscellaneous
+    ========================================================= -->
+    <!-- Skip strict settings check for forward-compat -->
+    <skip_check_for_incorrect_settings>1</skip_check_for_incorrect_settings>
+    <!-- Graceful shutdown: wait up to 60 s for running queries -->
+    <shutdown_wait_unfinished>60</shutdown_wait_unfinished>
+    <!-- Send anonymous usage statistics: off for private server -->
+    <send_crash_reports>
+        <enabled>false</enabled>
+    </send_crash_reports>
+
+</clickhouse>

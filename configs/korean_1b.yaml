@@ -1,0 +1,41 @@
+# Korean LLM 1B parameters — BF16 기본 설정
+# B200 × 8 GPU 최적화, GQA(4:1) + SwiGLU + RoPE(long-context)
+#
+# 아키텍처 계산:
+#   d_ffn = int(2/3 * 4 * 2048) = 5461 → 16배수 올림 = 5472 (FP8 alignment)
+#   실제 파라미터 수 ≈ 12 * 24 * 2048^2 = 1,207,959,552 (~1.2B)
+#
+# 학습 설정:
+#   eff_batch = 4(bs) * 8(GPU) * 8(accum) * 4096(seq) = 1,048,576 토큰/스텝
+#   200,000 스텝 × 1M tok = 200B 토큰 처리
+model:
+  vocab_size: 64000
+  d_model: 2048
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4          # GQA: 4 KV 그룹, 16 쿼리 헤드 (4:1 비율)
+  d_ffn: 5472            # SwiGLU: int(2/3 * 4 * 2048)=5461 → 16배수=5472
+  max_seq_len: 4096
+  rope_theta: 500000.0   # Llama-3 스타일 고주파 외삽 (장문 컨텍스트)
+  dropout: 0.0
+  bias: false
+  use_flash_attn: true
+  use_fp8: false         # BF16 기본; FP8은 korean_1b_fp8.yaml 참조
+
+train:
+  max_steps: 200000
+  batch_size: 4          # per GPU: 4 × 4096 = 16,384 토큰
+  grad_accum_steps: 8    # eff_batch: 4 × 8GPU × 8 × 4096 = 1,048,576 tok/step
+  lr: 2.0e-4
+  weight_decay: 0.1
+  warmup_steps: 4000
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 1000
+  eval_interval: 500
+  use_amp: true          # BF16 mixed precision
+  compile_model: false
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.env
+.venv/
+venv/
+
+# Model weights & checkpoints
+checkpoints/
+*.ckpt
+*.pt
+*.pth
+
+# Training data (large binary files & raw datasets)
+data/*.bin
+data/*.log
+data/korean_extra/
+data/code/
+data/sft_*/
+*.parquet
+*.jsonl
+*.xz
+*.arrow
+
+# Logging & experiment tracking
+wandb/
+*/tensorboard/
+nohup.out
+
+# Temp benchmark configs
+/tmp/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+
+# Claude Code local settings
+.claude/
+
+# Logs
+*.log
+
+# Tokenizer model files (large)
+tokenizer/*.model
+tokenizer/korean_sp/
+
+# Raw data (huge text files)
+data/raw/
+data/raw/**/*.txt
+!tokenizer/merges.txt
+
+# Archives
+*.tar.zst
+*.tar.gz
+*.zip
+
+# Backup files
+*.bak
+
+# SFT data
+data/sft_*.jsonl
+
+# Do NOT ignore (for clarity):
+# *.py, *.yaml (configs/), *.sh, *.md, tokenizer/merges.txt, CLAUDE.md
