@@ -11,10 +11,10 @@ Launch single-GPU:
         --sft_data data/sft/train.jsonl \\
         --device cuda:0
 
-Launch multi-GPU (DDP via torchrun):
-    torchrun --nproc_per_node=8 train/sft.py \\
-        --base_checkpoint checkpoints/korean_1b_fp8_run1/checkpoint-0034000 \\
-        --sft_data data/sft/train.jsonl
+Launch multi-GPU (DDP via torchrun, 7 GPU):
+    torchrun --nproc_per_node=7 train/sft.py \\
+        --base_checkpoint checkpoints/3b_final/checkpoint-0319772 \\
+        --sft_data data/sft_combined/train_filtered.jsonl
 
 KEY DIFFERENCES from pretrain.py:
   - Loads weights from a pretrained checkpoint via LLM.from_pretrained()
@@ -504,7 +504,7 @@ def main() -> None:
 
     # ---- NUMA affinity for optimal GPU↔CPU memory locality ---------------
     # B200 topology: GPU 0-3 → NUMA node 0 (cores 0-35)
-    #                GPU 4-7 → NUMA node 1 (cores 36-71)
+    #                GPU 4-6 → NUMA node 1 (cores 36-71)  [7 GPU 환경]
     try:
         if local_rank < 4:
             os.sched_setaffinity(0, set(range(0, 36)))   # NUMA node 0

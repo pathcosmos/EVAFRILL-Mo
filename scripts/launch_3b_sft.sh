@@ -1,30 +1,38 @@
 #!/usr/bin/env bash
 # =============================================================================
-# launch_3b_sft.sh — 8-GPU FP8 SFT launcher for 3B Korean LLM
+# launch_3b_sft.sh — 7-GPU FP8 SFT launcher for 3B Korean LLM (EVAFRILL-Mo)
 #
 # Usage:
 #   bash scripts/launch_3b_sft.sh
 #   bash scripts/launch_3b_sft.sh --max_steps 200    # quick test
 #   bash scripts/launch_3b_sft.sh --resume checkpoints/korean_3b_sft_v1/checkpoint-0002000
 #
-# Base model : checkpoints/korean_3b_fp8_run1/checkpoint-XXXXXX  (기본값)
+# Base model : EVAFRILL-Mo 3B — checkpoints/3b_final/checkpoint-0319772 (기본값)
 #              --base_checkpoint 인자로 덮어쓸 수 있음
 # SFT data   : data/sft_combined/train_filtered.jsonl
 #              (먼저 scripts/prepare_sft_combined.sh → data/filter_sft_v2.py 실행)
 #
-# Effective batch: 2 (local) × 8 GPU × 4 (grad_accum) = 64 samples/step
+# Effective batch: 2 (local) × 7 GPU × 4 (grad_accum) = 56 samples/step
 # =============================================================================
 set -euo pipefail
 
-# ---- Configurable defaults --------------------------------------------------
-RUN_NAME="${RUN_NAME:-korean_3b_sft_v1}"
+# ---- ai-env 자동 활성화 ------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+AIENV_DIR="${SCRIPT_DIR}/../ai-env"
+if [ -d "$AIENV_DIR" ] && [ -z "${VIRTUAL_ENV:-}" ]; then
+    source "$AIENV_DIR/bin/activate"
+    echo "[INFO] ai-env activated: $(which python)"
+fi
+
+# ---- Configurable defaults (EVAFRILL-Mo 3B SFT) -----------------------------
+RUN_NAME="${RUN_NAME:-3b_sft}"
 CONFIG="${CONFIG:-configs/korean_3b_sft.yaml}"
-BASE_CHECKPOINT="${BASE_CHECKPOINT:-checkpoints/korean_3b_fp8_run1/checkpoint-0057000}"
+BASE_CHECKPOINT="${BASE_CHECKPOINT:-checkpoints/3b_final/checkpoint-0319772}"
 SFT_DATA="${SFT_DATA:-data/sft_combined/train_filtered.jsonl}"
 VAL_DATA="${VAL_DATA:-data/sft_combined/val_filtered.jsonl}"
 CKPT_DIR="checkpoints/${RUN_NAME}"
 LOG_FILE="${CKPT_DIR}/train.log"
-NPROC=8
+NPROC=7
 MASTER_PORT="${MASTER_PORT:-29503}"
 
 MAX_STEPS=33000
@@ -59,7 +67,7 @@ if [[ ! -d "${BASE_CHECKPOINT}" ]]; then
     echo ""
     echo "  --base_checkpoint 인자로 실제 경로를 지정하거나"
     echo "  BASE_CHECKPOINT 환경변수를 설정하세요."
-    echo "  예: bash scripts/launch_3b_sft.sh --base_checkpoint checkpoints/korean_3b_fp8_run1/checkpoint-0057000"
+    echo "  예: bash scripts/launch_3b_sft.sh --base_checkpoint checkpoints/3b_final/checkpoint-0319772"
     echo "=================================================================="
     exit 1
 fi

@@ -1,0 +1,25 @@
+# llm-star (EVAFRILL-Mo) — 패키지 의존성
+# 설치: ai-env/bin/pip install -r requirements.txt
+#
+# ⚠ 아래 패키지는 NV 커스텀 빌드 — pip install 금지
+# torch              2.10.0+cu128   (ai-env 설치됨)
+# flash_attn         2.8.3          (ai-env 설치됨)
+# transformer_engine 2.10.0         (심볼릭 링크, setup_ai_env.sh 참조)
+
+# HuggingFace
+transformers>=4.40.0
+tokenizers>=0.19.0
+datasets>=4.0.0
+accelerate>=0.30.0
+peft>=0.10.0
+
+# Training
+trl>=0.8.6
+sentencepiece>=0.1.99
+wandb>=0.16.0
+tensorboard>=2.16.0
+
+# Utilities
+PyYAML>=6.0
+numpy>=1.26.0
+tqdm>=4.66.0

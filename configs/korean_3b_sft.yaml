@@ -1,46 +1,35 @@
-# Korean 3B SFT Configuration
+# EVAFRILL-Mo 3B SFT Configuration
 #
-# Base model: checkpoints/korean_3b_fp8_run1/checkpoint-XXXXXX (3B params pretrained)
-# SFT 목표: instruction following + 반복 퇴화 완화 + 생성 품질 향상
-# 아키텍처: LLaMA-3 3B 참고 (d=3072, 28L, 24H, GQA 8:1)
+# Base model: checkpoints/3b_final/checkpoint-0319772
+#   - Hybrid Mamba-2 + Transformer (26L: 24×Mamba + 2×Attn), 2.94B params
+#   - Pretrain 완료: 319,772 steps, 62h, 3/9 완료
+#   - 아키텍처는 sft.py가 checkpoint/config.yaml에서 자동 로드 — model: 섹션 무시됨
 #
-# 실행: bash scripts/launch_3b_sft.sh
+# Data: data/sft_combined/train_filtered.jsonl (2.44M samples, filtered)
+#       data/sft_combined/val_filtered.jsonl   (49.8K samples)
 #
-# [설계 근거 — 2026-03-02]
-#   - batch: 2 × 8GPU × 4 grad_accum = 64 eff_batch
-#   - max_steps 33000 ≈ 3 epochs × 700K samples / 64 eff_batch
-#   - lr=1e-5: pretrain 1.5e-4의 1/15 (catastrophic forgetting 방지)
-#   - NEFTune alpha=5.0: 생성 다양성 향상, 반복 퇴화 완화
-#   - use_fp8=true: B200 MXFP8 네이티브 가속 유지
-
-model:
-  vocab_size: 64000
-  d_model: 3072
-  n_layers: 28
-  n_heads: 24
-  n_kv_heads: 8
-  d_ffn: 8192
-  max_seq_len: 4096
-  rope_theta: 500000.0
-  dropout: 0.0
-  bias: false
-  use_flash_attn: true
-  use_fp8: true
+# 실행: bash train_3b_sft_resilient.sh
+#
+# [설계 근거 — 2026-03-10]
+#   - GPU: 7× B200
+#   - eff_batch: 2 × 7GPU × 4 grad_accum = 56
+#   - 1 epoch: 2,439,397 / 56 ≈ 43,560 steps → max_steps=44000 (≈1 epoch)
+#   - lr=1e-5: pretrain lr(3e-4)의 1/30 (catastrophic forgetting 방지)
+#   - NEFTune alpha=5.0: 반복 퇴화 완화, 생성 다양성 향상
+#   - save_interval=5000, eval_interval=1000
 
 train:
-  max_steps: 33000       # 3 epochs × 700K / 64 eff_batch
-  batch_size: 2          # per GPU (3B VRAM 절약)
-  grad_accum_steps: 4    # eff_batch: 2 × 8GPU × 4 = 64
-  lr: 1.0e-5             # catastrophic forgetting 방지
+  max_steps: 44000       # ≈ 1 epoch on 2.44M samples, eff_batch=56
+  batch_size: 2          # per GPU (Mamba-2 hybrid VRAM 절약)
+  grad_accum_steps: 4    # eff_batch: 2 × 7GPU × 4 = 56
+  lr: 1.0e-5             # pretrain 3e-4의 1/30 (catastrophic forgetting 방지)
   weight_decay: 0.01
-  warmup_steps: 500
+  warmup_steps: 500      # 1.1% of 44,000 steps
   max_grad_norm: 1.0
   log_interval: 10
-  save_interval: 2000
-  eval_interval: 500
-  use_amp: false
-  compile_model: false
-  neftune_alpha: 5.0     # NEFTune noise injection
+  save_interval: 5000
+  eval_interval: 1000
+  neftune_alpha: 5.0     # NEFTune noise injection (반복 퇴화 완화)
 
 tokenizer:
   vocab_size: 64000

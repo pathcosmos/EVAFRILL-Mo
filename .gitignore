@@ -10,6 +10,7 @@ build/
 .env
 .venv/
 venv/
+ai-env/
 
 # Model weights & checkpoints
 checkpoints/
