@@ -67,6 +67,10 @@ data/raw/**/*.txt
 # Backup files
 *.bak
 
+# NCloud credentials & backups
+download_from_ncloud.py
+ncloud_backup/
+
 # SFT data
 data/sft_*.jsonl
 
