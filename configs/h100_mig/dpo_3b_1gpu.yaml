@@ -1,0 +1,31 @@
+# EVAFRILL-Mo 3B DPO — Single GPU (H100 MIG 3g.40gb, 42.3GB VRAM)
+#
+# Base model: checkpoints/3b_sft_v2/checkpoint-best (SFT 완료 모델)
+# Method: LoRA DPO (native, TRL 미사용)
+#
+# [설계 근거]
+#   - GPU: H100 PCIe MIG 3g.40gb (42.3GB VRAM)
+#   - LoRA DPO VRAM 예산: base(6GB) + LoRA(0.3GB) + optim(0.2GB) + act(10GB) + ref_fwd(6GB) ≈ 22GB
+#   - BF16 + Gradient Checkpointing (FP8 미지원)
+#   - eff_batch: 1 × 16 grad_accum = 16
+#   - Nemotron-H 스타일 2-round DPO
+
+train:
+  # Round 1 설정 (Round 2는 max_steps=2000, beta=0.05, lr=1e-7로 변경)
+  max_steps: 3000
+  batch_size: 1
+  grad_accum_steps: 16     # eff_batch = 16
+  lr: 5.0e-7               # DPO는 SFT보다 훨씬 낮은 lr
+  weight_decay: 0.01
+  warmup_steps: 100
+  max_length: 1024          # VRAM 제약으로 seq_len 제한
+  beta: 0.1                 # DPO temperature
+
+  # LoRA 설정
+  use_lora: true
+  lora_rank: 32
+  lora_alpha: 64
+
+  # 저장/로깅
+  save_interval: 500
+  log_interval: 10

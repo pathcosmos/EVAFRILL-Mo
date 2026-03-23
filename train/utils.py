@@ -243,22 +243,108 @@ def load_checkpoint(
                 + "\nUse matching config or start fresh."
             )
 
-    raw_model.load_state_dict(
-        torch.load(ckpt_dir / "model.pt", map_location=device, weights_only=True)
-    )
+    state_dict = torch.load(ckpt_dir / "model.pt", map_location=device, weights_only=True)
+    # Auto-convert TransformerEngine (FP8) state dict when loading into non-TE model
+    has_te_keys = any("_extra_state" in k or ".fc1_weight" in k for k in state_dict)
+    has_std_keys = any(".gate_proj.weight" in k for k in state_dict)
+    if has_te_keys and not has_std_keys:
+        from model.transformer import LLM
+        state_dict = LLM._convert_te_state_dict(state_dict)
+    raw_model.load_state_dict(state_dict)
 
+    optimizer_restored = False
     if optimizer is not None:
-        optimizer.load_state_dict(
-            torch.load(ckpt_dir / "optimizer.pt", map_location=device, weights_only=True)
-        )
+        opt_path = ckpt_dir / "optimizer.pt"
+        if opt_path.exists():
+            try:
+                optimizer.load_state_dict(
+                    torch.load(opt_path, map_location=device, weights_only=True)
+                )
+                optimizer_restored = True
+            except (RuntimeError, ValueError) as e:
+                print(f"[WARN] Could not restore optimizer state (TE→non-TE migration?): {e}")
+                # Attempt partial momentum restoration: match parameters by shape.
+                try:
+                    saved_opt = torch.load(opt_path, map_location=device, weights_only=True)
+                    saved_states = list(saved_opt.get("state", {}).values())
+                    cur_params = [p for group in optimizer.param_groups for p in group["params"]]
+                    matched = 0
+                    si = 0  # index into saved_states
+                    for pi, p in enumerate(cur_params):
+                        if si >= len(saved_states):
+                            break
+                        ss = saved_states[si]
+                        if (
+                            "exp_avg" in ss
+                            and ss["exp_avg"].shape == p.shape
+                            and "exp_avg_sq" in ss
+                            and ss["exp_avg_sq"].shape == p.shape
+                        ):
+                            optimizer.state[p]["step"] = ss.get("step", torch.tensor(0))
+                            optimizer.state[p]["exp_avg"] = ss["exp_avg"].to(device=device, dtype=p.dtype)
+                            optimizer.state[p]["exp_avg_sq"] = ss["exp_avg_sq"].to(device=device, dtype=p.dtype)
+                            matched += 1
+                            si += 1
+                        else:
+                            # Shape mismatch — log and skip this saved state slot.
+                            print(
+                                f"[WARN]   param[{pi}] shape={tuple(p.shape)} vs "
+                                f"saved state[{si}] exp_avg shape="
+                                f"{tuple(ss['exp_avg'].shape) if 'exp_avg' in ss else 'N/A'} — skipping"
+                            )
+                            si += 1  # advance saved pointer regardless
+                    print(
+                        f"[WARN] Partial optimizer restore: {matched}/{len(cur_params)} params "
+                        f"matched by shape. Unmatched params start with zero momentum."
+                    )
+                    optimizer_restored = True  # partial restore is better than nothing
+                except Exception as e2:
+                    print(f"[WARN] Partial optimizer restore also failed: {e2}")
+                    print("[WARN] Optimizer starts fully fresh.")
 
     if scheduler is not None:
-        scheduler.load_state_dict(
-            torch.load(ckpt_dir / "scheduler.pt", map_location=device, weights_only=True)
-        )
+        sched_restored = False
+        sched_path = ckpt_dir / "scheduler.pt"
+        if sched_path.exists():
+            try:
+                scheduler.load_state_dict(
+                    torch.load(sched_path, map_location=device, weights_only=True)
+                )
+                sched_restored = True
+            except (RuntimeError, ValueError) as e:
+                print(f"[WARN] Could not restore scheduler state: {e}")
+        if not sched_restored:
+            # Fast-forward the scheduler to the correct step so that LR
+            # reflects the resume position rather than replaying warmup from 0.
+            # train_state.pt has not been read yet at this point, so we derive
+            # the step from the checkpoint directory name as a fallback.
+            resume_step: Optional[int] = None
+            try:
+                # Directory names like "checkpoint-0010000"
+                dir_stem = ckpt_dir.name  # e.g. "checkpoint-0010000"
+                numeric = dir_stem.split("-")[-1]
+                if numeric.isdigit():
+                    resume_step = int(numeric)
+            except Exception:
+                pass
+            if resume_step is not None and resume_step > 0:
+                print(
+                    f"[WARN] Fast-forwarding scheduler to step {resume_step} "
+                    f"(skipping {resume_step} no-op scheduler.step() calls)."
+                )
+                # LambdaLR tracks last_epoch internally; advance it without
+                # touching the optimizer (use_count trick: call step() in a loop
+                # but only update last_epoch, not optimizer state).
+                scheduler.last_epoch = resume_step - 1
+                scheduler.step()  # advances to resume_step and recomputes _last_lr
+                print(
+                    f"[WARN] Scheduler fast-forwarded: last_epoch={scheduler.last_epoch}, "
+                    f"lr={scheduler.get_last_lr()}"
+                )
 
+    # weights_only=False: train_state contains numpy RNG arrays for exact resume
     train_state = torch.load(
-        ckpt_dir / "train_state.pt", map_location="cpu", weights_only=True
+        ckpt_dir / "train_state.pt", map_location="cpu", weights_only=False
     )
     step: int = int(train_state["step"])
     loss: float = float(train_state["loss"])

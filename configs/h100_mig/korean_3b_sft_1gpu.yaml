@@ -1,0 +1,31 @@
+# EVAFRILL-Mo 3B SFT — Single GPU (H100 MIG 3g.40gb, 42.3GB VRAM)
+#
+# Base model: checkpoints/3b_final/checkpoint-0319772
+# Fresh start from pretrained checkpoint
+#
+# [설계 근거 — 2026-03-17, 최적화 2026-03-17]
+#   - GPU: H100 PCIe MIG 3g.40gb (42.3GB VRAM, 46 SMs)
+#   - CPU: 45 cores (cgroup), RAM: 200GB (cgroup)
+#   - BF16 + Gradient Checkpointing (no FP8, MIG NVML 제약)
+#   - 벤치마크 결과: bs=4 ga=7 @ 27.7GB VRAM (68.7%), 5,475 tok/s (+10% vs bs=1)
+#   - eff_batch: 4 × 1GPU × 7 grad_accum = 28
+#   - 1 epoch: 3,774,413 / 28 ≈ 134,800 steps → max_steps=135000
+#   - 예상 시간: 135,000 steps × ~10.5s/step ≈ ~391 hours ≈ ~16 days
+
+train:
+  max_steps: 135000      # ≈ 1 epoch on 3.77M samples, eff_batch=28
+  batch_size: 4          # 벤치마크 최적: bs=4 @ 27.7GB (68.7% VRAM)
+  grad_accum_steps: 7    # eff_batch=28 (4×7), bs=1→4 전환으로 tok/s +10%
+  lr: 7.0e-6             # sqrt(28/56) * 1e-5 ≈ 7e-6 (linear scaling rule)
+  weight_decay: 0.01
+  warmup_steps: 500
+  max_grad_norm: 1.0
+  log_interval: 10
+  save_interval: 2000    # 크래시 복구 위해 자주 저장
+  eval_interval: 5000    # validation 1회 ~5분, 부담 최소화
+  neftune_alpha: 5.0     # NEFTune noise injection (반복 퇴화 완화)
+  max_val_batches: 500   # validation 배치 수 제한 (속도 최적화)
+
+tokenizer:
+  vocab_size: 64000
+  type: sentencepiece_unigram

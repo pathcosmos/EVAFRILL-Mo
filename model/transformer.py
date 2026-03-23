@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
+
 from .config import LMConfig
 from .layers import RMSNorm, RotaryEmbedding, SwiGLU
 from .attention import MultiHeadAttention
@@ -161,6 +163,9 @@ class LLM(nn.Module):
             theta=config.rope_theta,
         )
 
+        # --- Gradient checkpointing flag -------------------------------------
+        self._gradient_checkpointing = False
+
         # --- Initialise weights ----------------------------------------------
         self.apply(self._init_weights)
 
@@ -218,10 +223,16 @@ class LLM(nn.Module):
 
         # Run through blocks — Mamba blocks ignore cos/sin
         for layer, ltype in zip(self.layers, self._layer_types):
-            if ltype == "M":
-                x = layer(x)
+            if self._gradient_checkpointing and self.training:
+                if ltype == "M":
+                    x = torch_checkpoint(layer, x, use_reentrant=False)
+                else:
+                    x = torch_checkpoint(layer, x, cos, sin, use_reentrant=False)
             else:
-                x = layer(x, cos, sin)
+                if ltype == "M":
+                    x = layer(x)
+                else:
+                    x = layer(x, cos, sin)
 
         # Final normalisation
         x = self.norm(x)
@@ -271,6 +282,14 @@ class LLM(nn.Module):
         """HuggingFace-compatible accessor for the token embedding layer."""
         return self.embedding
 
+    def gradient_checkpointing_enable(self) -> None:
+        """Enable gradient checkpointing to trade compute for memory."""
+        self._gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self) -> None:
+        """Disable gradient checkpointing."""
+        self._gradient_checkpointing = False
+
     # ------------------------------------------------------------------
     # Constructors
     # ------------------------------------------------------------------
@@ -280,6 +299,35 @@ class LLM(nn.Module):
         """Construct an LLM from an LMConfig instance."""
         return cls(config)
 
+    @staticmethod
+    def _convert_te_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Convert a TransformerEngine (FP8) state dict to standard PyTorch keys.
+
+        TE LayerNormMLP uses:
+            ffn.layer_norm_weight  → ffn_norm.weight
+            ffn.fc1_weight         → ffn.gate_proj.weight + ffn.up_proj.weight  (split dim0)
+            ffn.fc2_weight         → ffn.down_proj.weight
+            ffn._extra_state       → (dropped)
+        TE Linear uses:
+            *.qkv_proj._extra_state → (dropped)
+            *.out_proj._extra_state → (dropped)
+        """
+        converted = {}
+        for k, v in state_dict.items():
+            if "_extra_state" in k:
+                continue
+            if ".ffn.layer_norm_weight" in k:
+                converted[k.replace(".ffn.layer_norm_weight", ".ffn_norm.weight")] = v
+            elif ".ffn.fc1_weight" in k:
+                d_ffn = v.shape[0] // 2
+                converted[k.replace(".ffn.fc1_weight", ".ffn.gate_proj.weight")] = v[:d_ffn]
+                converted[k.replace(".ffn.fc1_weight", ".ffn.up_proj.weight")] = v[d_ffn:]
+            elif ".ffn.fc2_weight" in k:
+                converted[k.replace(".ffn.fc2_weight", ".ffn.down_proj.weight")] = v
+            else:
+                converted[k] = v
+        return converted
+
     @classmethod
     def from_pretrained(cls, path: str | Path) -> "LLM":
         """Load model from a checkpoint directory.
@@ -287,6 +335,9 @@ class LLM(nn.Module):
         Expects:
             <path>/config.yaml  — serialised LMConfig
             <path>/model.pt     — state dict produced by save_pretrained
+
+        Automatically detects and converts TransformerEngine (FP8) state dicts
+        to standard PyTorch format when the model is built without TE.
         """
         path = Path(path)
         config = LMConfig.from_yaml(path / "config.yaml")
@@ -296,6 +347,11 @@ class LLM(nn.Module):
             map_location="cpu",
             weights_only=True,
         )
+        # Detect TE state dict by checking for TE-specific keys
+        has_te_keys = any("_extra_state" in k or ".fc1_weight" in k for k in state_dict)
+        has_std_keys = any(".gate_proj.weight" in k for k in state_dict)
+        if has_te_keys and not has_std_keys:
+            state_dict = cls._convert_te_state_dict(state_dict)
         model.load_state_dict(state_dict)
         return model
 

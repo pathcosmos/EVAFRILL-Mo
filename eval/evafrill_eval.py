@@ -2,11 +2,11 @@
 EVAFRILL-Mo 3B — 종합 평가 파이프라인
 ======================================
 
-Phase 1: PPL (7-GPU 병렬, 14개 val 셋)
+Phase 1: PPL (1-GPU 순차, 16개 val 셋)
 Phase 2: 생성 품질 + 반복률 분석 (cuda:0)
 Phase 3: Calibration (cuda:0)
 Phase 4: lm-eval 벤치마크 — 커스텀 래퍼 사용
-          (belebele_kor_Hang, global_mmlu_full_ko, hellaswag, arc_easy, arc_challenge)
+          (belebele_kor_Hang, global_mmlu_full_ko, hellaswag, arc_easy, arc_challenge, kmmlu)
 
 Usage:
     cd /home/ghong/project-ghong/taketimes/llm-star
@@ -24,7 +24,6 @@ import os
 import sys
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -51,8 +50,8 @@ DATA_DIR = _PROJECT_ROOT / "data"
 OUTPUT_DIR = _PROJECT_ROOT / "eval" / "outputs"
 
 # GPUs available
-N_GPUS = 7
-GPU_IDS = list(range(N_GPUS))
+N_GPUS = 1
+GPU_IDS = [0]
 
 # 한국어 생성 프롬프트 (15개)
 PROMPTS = [
@@ -75,13 +74,15 @@ PROMPTS = [
 
 # PPL 태스크: GPU → val 파일 리스트
 PPL_TASKS: Dict[int, List[str]] = {
-    0: ["3b_val.bin"],
-    1: ["korean_c4_val.bin", "korean_val.bin"],
-    2: ["hplt_ko_val.bin", "cc100_ko_val.bin"],
-    3: ["korean_wiki_val.bin", "korean_namuwiki_val.bin"],
-    4: ["cosmo_auto_math_text_val.bin", "cosmo_stories_val.bin", "cosmo_web_v2_val.bin"],
-    5: ["cosmo_stanford_val.bin", "cosmo_khanacademy_val.bin", "cosmo_openstax_val.bin", "cosmo_wikihow_val.bin"],
-    6: ["mathpile_val.bin", "open_web_math_val.bin"],
+    0: [
+        "3b_val.bin",
+        "korean_c4_val.bin", "korean_val.bin",
+        "hplt_ko_val.bin", "cc100_ko_val.bin",
+        "korean_wiki_val.bin", "korean_namuwiki_val.bin",
+        "cosmo_auto_math_text_val.bin", "cosmo_stories_val.bin", "cosmo_web_v2_val.bin",
+        "cosmo_stanford_val.bin", "cosmo_khanacademy_val.bin", "cosmo_openstax_val.bin", "cosmo_wikihow_val.bin",
+        "mathpile_val.bin", "open_web_math_val.bin",
+    ],
 }
 
 
@@ -95,7 +96,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--seq-len", type=int, default=2048)
     parser.add_argument("--stride", type=int, default=512)
-    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--max-new-tokens", type=int, default=256)
     parser.add_argument("--skip-phase1", action="store_true")
     parser.add_argument("--skip-phase2", action="store_true")
@@ -193,39 +194,24 @@ def _ppl_worker(
 
 def run_phase1(checkpoint: str, seq_len: int, stride: int, batch_size: int) -> Dict[str, float]:
     print("\n" + "=" * 60)
-    print("Phase 1: PPL 평가 (7-GPU 병렬)")
+    print("Phase 1: PPL 평가 (1-GPU 순차)")
     print("=" * 60)
     t0 = time.time()
 
-    futures_map = {}
-    all_results = {}
-    ctx = torch.multiprocessing.get_context("spawn")
+    existing = [f for f in PPL_TASKS[0] if (DATA_DIR / f).exists()]
+    if not existing:
+        print("  평가할 val 파일 없음")
+        return {}
 
-    with ProcessPoolExecutor(max_workers=N_GPUS, mp_context=ctx) as executor:
-        for gpu_id, val_files in PPL_TASKS.items():
-            # filter only existing files
-            existing = [f for f in val_files if (DATA_DIR / f).exists()]
-            if not existing:
-                continue
-            fut = executor.submit(
-                _ppl_worker,
-                checkpoint,
-                gpu_id,
-                existing,
-                str(DATA_DIR),
-                seq_len,
-                stride,
-                batch_size,
-            )
-            futures_map[fut] = gpu_id
-
-        for fut in as_completed(futures_map):
-            gpu_id = futures_map[fut]
-            try:
-                res = fut.result()
-                all_results.update(res)
-            except Exception as e:
-                print(f"[GPU {gpu_id}] PPL worker 오류: {e}")
+    all_results = _ppl_worker(
+        checkpoint=checkpoint,
+        gpu_id=0,
+        val_files=existing,
+        data_dir=str(DATA_DIR),
+        seq_len=seq_len,
+        stride=stride,
+        batch_size=batch_size,
+    )
 
     elapsed = time.time() - t0
     print(f"\n  Phase 1 완료 ({elapsed:.1f}s)")
@@ -544,7 +530,7 @@ def run_phase4(checkpoint: str) -> Dict:
                 results.append(new_text)
             return results
 
-    lm = EvafrillLM(checkpoint, device=device, batch_size=8)
+    lm = EvafrillLM(checkpoint, device=device, batch_size=2)
 
     tasks = [
         "belebele_kor_Hang",
@@ -552,6 +538,7 @@ def run_phase4(checkpoint: str) -> Dict:
         "hellaswag",
         "arc_easy",
         "arc_challenge",
+        "kmmlu",
     ]
 
     print(f"  태스크: {', '.join(tasks)}")
@@ -562,7 +549,7 @@ def run_phase4(checkpoint: str) -> Dict:
             model=lm,
             tasks=tasks,
             num_fewshot=0,
-            batch_size=8,
+            batch_size=2,
             log_samples=False,
         )
         return results.get("results", {})
@@ -661,6 +648,7 @@ def generate_report(
             "hellaswag": 0.25,
             "arc_easy": 0.25,
             "arc_challenge": 0.25,
+            "kmmlu": 0.25,
         }
         for task, res in bench.items():
             acc = res.get("acc,none", res.get("acc", "N/A"))

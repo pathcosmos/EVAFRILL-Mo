@@ -22,11 +22,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 하드웨어 환경
 
+### 현재 환경: H100 MIG 3g.40gb (단일 파티션)
+
+| 항목 | 사양 |
+|------|------|
+| GPU | 1× NVIDIA H100 MIG 3g.40gb (~42 GB VRAM) |
+| 학습 전략 | Single GPU, BF16 + Gradient Checkpointing (FP8 미지원) |
+| 설정 | `configs/h100_mig/` |
+| 런치 스크립트 | `train_3b_sft_1gpu.sh` |
+
+### 이전 환경: B200 × 8
+
 | 항목 | 사양 |
 |------|------|
 | GPU | 8× NVIDIA B200 (183 GB VRAM each, **~1.47 TB total**) |
 | RAM | 2.2 TB |
 | CUDA | 13.0 |
+| 학습 전략 | DDP / FSDP, BF16 / FP8 |
+| 설정 | `configs/b200_8gpu/` |
+| 런치 스크립트 | `scripts/b200_8gpu/` |
 | Storage (작업) | `/PROJECT/0325120031_A/ghong/taketimes/` → 3.5 TB, 여유 2.2 TB |
 | Storage (홈) | `/home/ghong` → 5 GB (소규모 코드만 저장) |
 
@@ -57,14 +71,21 @@ pip install transformers accelerate peft trl deepspeed bitsandbytes sentencepiec
 ## 권장 프로젝트 구조
 
 ```
-llm-bang/
+EVAFRILL-Mo/
 ├── CLAUDE.md
 ├── data/               # 학습 데이터 (원본 텍스트, 전처리 완료본)
 ├── tokenizer/          # 토크나이저 학습·저장
 ├── model/              # 모델 아키텍처 정의 (nn.Module)
 ├── train/              # 학습 스크립트 (단일 GPU / DDP / FSDP)
 ├── eval/               # 평가 스크립트 (perplexity, downstream task)
-├── configs/            # YAML/JSON 학습 설정 파일
+├── configs/
+│   ├── b200_8gpu/      # B200 8GPU 환경 YAML
+│   ├── h100_mig/       # H100 MIG 1GPU 환경 YAML
+│   └── README.md       # 하드웨어별 설정 가이드
+├── scripts/
+│   ├── b200_8gpu/      # B200용 런치 + resilient 스크립트
+│   └── (공통 스크립트)
+├── train_3b_sft_1gpu.sh  # H100 MIG용 SFT 런치 (현재 사용 중)
 └── checkpoints/        # 모델 체크포인트 (대용량)
 ```
 
@@ -73,14 +94,14 @@ llm-bang/
 ## 멀티-GPU 학습 실행 패턴
 
 ```bash
-# torchrun (DDP) — 8 GPU
-torchrun --nproc_per_node=8 train/pretrain.py --config configs/small_lm.yaml
+# H100 MIG 1GPU — 현재 환경
+bash train_3b_sft_1gpu.sh
 
-# 단일 GPU 테스트
-python train/pretrain.py --config configs/small_lm.yaml --device cuda:0
+# B200 8GPU — torchrun (DDP)
+torchrun --nproc_per_node=8 train/pretrain.py --config configs/b200_8gpu/small.yaml
 
-# FSDP (모델 샤딩, 대형 모델)
-torchrun --nproc_per_node=8 train/pretrain.py --config configs/large_lm.yaml --strategy fsdp
+# B200 8GPU — FSDP (모델 샤딩, 대형 모델)
+torchrun --nproc_per_node=8 train/pretrain.py --config configs/b200_8gpu/medium.yaml --strategy fsdp
 ```
 
 ---

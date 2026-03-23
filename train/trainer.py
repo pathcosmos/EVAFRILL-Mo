@@ -95,6 +95,10 @@ class TrainConfig:
     # GPU 메모리를 파일에 기록하는 간격 (0=비활성)
     log_memory_interval: int = 100
 
+    # Maximum number of validation batches per eval. 0 = use entire val set.
+    # Setting e.g. 500 limits validation to ~5 minutes when batch_size=1.
+    max_val_batches: int = 0
+
 
 # ---------------------------------------------------------------------------
 # Trainer
@@ -146,7 +150,7 @@ class Trainer:
         self._sampler = sampler   # for set_epoch() on each data pass
         self._epoch = 0
         self._val_loader = val_loader
-        self._best_val_loss: float = float("inf")
+        self._best_val_loss: float = self._load_best_val_loss(config.checkpoint_dir)
         self._val_patience_counter: int = 0
         self._val_patience_limit: int = 5  # early stopping patience
 
@@ -226,6 +230,7 @@ class Trainer:
         running_loss = 0.0
         log_step_count = 0
         accum_loss = torch.tensor(0.0, device=self.device)  # initialise so end-of-training save is safe on empty loops
+        avg_loss: float = float("nan")  # guard against UnboundLocalError when start_step >= max_steps
 
         for step in range(start_step, cfg.max_steps):
             # ---- Gradient accumulation loop --------------------------------
@@ -441,6 +446,26 @@ class Trainer:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _load_best_val_loss(checkpoint_dir: str) -> float:
+        """Read val_loss from checkpoint-best/train_state.pt if it exists.
+
+        Returns float("inf") when the best checkpoint is absent so the first
+        validation run will always be treated as an improvement.
+        """
+        best_dir = Path(checkpoint_dir) / "checkpoint-best"
+        state_file = best_dir / "train_state.pt"
+        if not state_file.exists():
+            return float("inf")
+        try:
+            state = torch.load(state_file, map_location="cpu", weights_only=False)
+            val = float(state["loss"])
+            print(f"[INFO] Restored best val_loss={val:.4f} from {state_file}")
+            return val
+        except Exception as e:
+            print(f"[WARN] Could not read best val_loss from {state_file}: {e}")
+            return float("inf")
+
     @torch.no_grad()
     def _run_validation(self) -> float:
         """
@@ -454,7 +479,11 @@ class Trainer:
         total_loss = 0.0
         total_batches = 0
 
+        max_val_batches = self.config.max_val_batches  # 0 = unlimited
         for batch in self._val_loader:  # type: ignore[union-attr]
+            if max_val_batches > 0 and total_batches >= max_val_batches:
+                break
+
             input_ids = batch[0].to(self.device, dtype=torch.long, non_blocking=True)
             targets   = batch[1].to(self.device, dtype=torch.long, non_blocking=True)
             # Consume attention_mask if provided (model does not use it yet).

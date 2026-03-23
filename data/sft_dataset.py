@@ -27,7 +27,10 @@ the assistant responses.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Union
 
@@ -122,6 +125,39 @@ def _build_conversation_turns(
     return pairs
 
 
+def _parse_lines_chunk(args: tuple) -> list[tuple[str, str]]:
+    """Parse a chunk of JSONL lines into (prompt, response) pairs.
+
+    Top-level function (not a method) so it can be pickled for multiprocessing.
+    """
+    lines, path_str, start_lineno = args
+    pairs: list[tuple[str, str]] = []
+
+    for i, line in enumerate(lines):
+        lineno = start_lineno + i
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        conv_list = obj.get("conversations") or obj.get("messages")
+        if conv_list and isinstance(conv_list, list):
+            turn_pairs = _build_conversation_turns(conv_list)
+            pairs.extend(turn_pairs)
+        elif "instruction" in obj and "output" in obj:
+            prompt, response = _build_alpaca_turns(
+                instruction=obj["instruction"],
+                input_text=obj.get("input", ""),
+                output=obj["output"],
+            )
+            pairs.append((prompt, response))
+
+    return pairs
+
+
 class SFTDataset(Dataset):
     """
     Supervised Fine-Tuning dataset built from JSONL files.
@@ -169,10 +205,27 @@ class SFTDataset(Dataset):
             )
         self.eos_token_id: int = eos_id
 
-        # ------------------------------------------------------------------
-        # Load raw JSONL samples.
-        # ------------------------------------------------------------------
         data_path = Path(data_path)
+
+        # ------------------------------------------------------------------
+        # Try loading from token cache (fast path: ~seconds instead of minutes)
+        # ------------------------------------------------------------------
+        cache_path = self._cache_path(data_path, max_seq_len)
+        if cache_path is not None and cache_path.exists():
+            import time as _time
+            _t0 = _time.perf_counter()
+            cached = torch.load(cache_path, map_location="cpu", weights_only=True)
+            self.samples = cached["samples"]
+            _elapsed = _time.perf_counter() - _t0
+            print(
+                f"[SFTDataset] Loaded {len(self.samples)} samples from cache "
+                f"in {_elapsed:.1f}s ({cache_path.name})"
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # Load raw JSONL samples (parallel JSON parsing).
+        # ------------------------------------------------------------------
         raw_samples = self._load_jsonl(data_path)
 
         # ------------------------------------------------------------------
@@ -253,9 +306,32 @@ class SFTDataset(Dataset):
             f"eos_token_id={self.eos_token_id}"
         )
 
+        # ------------------------------------------------------------------
+        # Save token cache for fast loading next time.
+        # ------------------------------------------------------------------
+        if cache_path is not None and n > 0:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                torch.save({"samples": self.samples}, cache_path)
+                size_mb = cache_path.stat().st_size / 1e6
+                print(f"[SFTDataset] Token cache saved: {cache_path} ({size_mb:.0f} MB)")
+            except Exception as e:
+                print(f"[SFTDataset] WARNING: Failed to save cache: {e}")
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _cache_path(data_path: Path, max_seq_len: int) -> Path | None:
+        """Compute a deterministic cache path based on data file and params."""
+        if not data_path.is_file():
+            return None
+        # Hash based on file path, size, mtime, and max_seq_len
+        stat = data_path.stat()
+        key = f"{data_path.resolve()}|{stat.st_size}|{stat.st_mtime}|{max_seq_len}"
+        h = hashlib.md5(key.encode()).hexdigest()[:12]
+        return data_path.parent / f".sft_cache_{data_path.stem}_{h}.pt"
 
     def _load_jsonl(self, path: Path) -> list[tuple[str, str]]:
         """
@@ -295,62 +371,35 @@ class SFTDataset(Dataset):
         """
         Parse a single JSONL file into (prompt, response) pairs.
 
-        Lines that are empty, whitespace-only, or fail JSON parsing are
-        silently skipped with a warning.  Lines whose schema cannot be
-        recognised are also skipped.
-
-        Args:
-            path: Path to a ``.jsonl`` file.
-
-        Returns:
-            List of (prompt_text, response_text) tuples extracted from
-            the file.
+        For large files (>100K lines), uses multiprocessing to parse in parallel.
         """
-        pairs: list[tuple[str, str]] = []
-
+        # Read all lines first (I/O is sequential anyway)
         with path.open("r", encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                line = line.strip()
-                if not line:
-                    continue
+            lines = fh.readlines()
 
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    print(
-                        f"[SFTDataset] WARNING: JSON parse error in "
-                        f"{path}:{lineno} — {exc}"
-                    )
-                    continue
+        n_lines = len(lines)
+        n_workers = min(os.cpu_count() or 1, 32)
 
-                # ---- Conversation format ------------------------------------
-                # Support both "conversations" and "messages" keys
-                conv_list = obj.get("conversations") or obj.get("messages")
-                if conv_list and isinstance(conv_list, list):
-                    turn_pairs = _build_conversation_turns(conv_list)
-                    if not turn_pairs:
-                        print(
-                            f"[SFTDataset] WARNING: No valid user→assistant "
-                            f"pairs in {path}:{lineno}, skipping."
-                        )
-                    pairs.extend(turn_pairs)
+        if n_lines > 100_000 and n_workers > 1:
+            # Parallel parsing for large files
+            print(f"[SFTDataset] Parsing {n_lines:,} lines with {n_workers} workers ...")
+            chunk_size = (n_lines + n_workers - 1) // n_workers
+            chunks = []
+            for i in range(0, n_lines, chunk_size):
+                chunk_lines = lines[i : i + chunk_size]
+                start_lineno = i + 1
+                chunks.append((chunk_lines, str(path), start_lineno))
 
-                # ---- Alpaca / Alpaca-no-input format -----------------------
-                elif "instruction" in obj and "output" in obj:
-                    prompt, response = _build_alpaca_turns(
-                        instruction=obj["instruction"],
-                        input_text=obj.get("input", ""),
-                        output=obj["output"],
-                    )
-                    pairs.append((prompt, response))
+            with ProcessPoolExecutor(max_workers=n_workers) as pool:
+                results = list(pool.map(_parse_lines_chunk, chunks))
 
-                else:
-                    print(
-                        f"[SFTDataset] WARNING: Unrecognised schema at "
-                        f"{path}:{lineno}, skipping."
-                    )
-
-        return pairs
+            pairs: list[tuple[str, str]] = []
+            for chunk_pairs in results:
+                pairs.extend(chunk_pairs)
+            return pairs
+        else:
+            # Small file: parse sequentially
+            return _parse_lines_chunk((lines, str(path), 1))
 
     # ------------------------------------------------------------------
     # Dataset interface

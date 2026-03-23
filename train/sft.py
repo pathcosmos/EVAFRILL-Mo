@@ -212,6 +212,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--save_interval", type=int, default=500, help="Checkpoint save interval (steps).")
     parser.add_argument("--eval_interval", type=int, default=250, help="Validation eval interval (steps).")
     parser.add_argument("--neftune_alpha", type=float, default=5.0, help="NEFTune noise magnitude (0 to disable).")
+    parser.add_argument("--no_fp8", action="store_true", default=False, help="Force disable FP8 even if pretrained config has use_fp8=True.")
+    parser.add_argument("--num_workers", type=int, default=4, help="Number of DataLoader worker processes.")
+    parser.add_argument("--max_val_batches", type=int, default=0, help="Max validation batches (0=unlimited).")
 
     # First pass: just get --config
     args, remaining = parser.parse_known_args()
@@ -234,6 +237,7 @@ def parse_args() -> argparse.Namespace:
             "save_interval": "save_interval",
             "eval_interval": "eval_interval",
             "neftune_alpha": "neftune_alpha",
+            "max_val_batches": "max_val_batches",
         }
         new_defaults = {}
         for yaml_key, arg_name in yaml_to_arg.items():
@@ -537,10 +541,11 @@ def main() -> None:
     # Weights stay in float32; TransformerEngine quantizes on-the-fly inside fp8_autocast.
     model = LLM.from_pretrained(args.base_checkpoint)
 
-    # When FP8 flag is passed at SFT time, enable it on the loaded config.
-    # This is useful if the pretrained model was trained without FP8 but you
-    # want to fine-tune with FP8 precision (the TE layers must exist in the model).
-    if args.use_fp8:
+    # FP8 override: --no_fp8 forces BF16 even if pretrained config had use_fp8=True.
+    # --use_fp8 enables FP8 if pretrained config had it disabled.
+    if args.no_fp8:
+        model.config.use_fp8 = False
+    elif args.use_fp8:
         model.config.use_fp8 = True
 
     # Move model to target device in bfloat16 (more memory-efficient than fp32
@@ -625,7 +630,7 @@ def main() -> None:
         sampler=train_sampler,
         # SFT datasets are typically small enough that 2–4 workers suffice.
         # We use 4 to balance I/O with CPU parsing overhead from JSONL.
-        num_workers=4,
+        num_workers=args.num_workers,
         pin_memory=True,
         drop_last=True,
         prefetch_factor=2,
@@ -686,6 +691,7 @@ def main() -> None:
         save_interval=args.save_interval,
         log_interval=10,
         eval_interval=args.eval_interval,
+        max_val_batches=args.max_val_batches,
     )
 
     # ---- LR Scheduler ------------------------------------------------------

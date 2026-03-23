@@ -1,3 +1,5 @@
+> 한국어 | **[English](README.en.md)**
+
 <div align="center">
 
 # EVAFRILL-Mo
@@ -36,6 +38,8 @@ NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) 아키텍처에서 영감�
 - [학습 데이터](#학습-데이터)
 - [개발 히스토리](#개발-히스토리)
 - [벤치마크 결과](#벤치마크-결과)
+- [SFT (Supervised Fine-Tuning)](#sft-supervised-fine-tuning)
+- [Post-SFT: 평가 → DPO 파이프라인](#post-sft-평가--dpo-파이프라인)
 - [관련 프로젝트](#관련-프로젝트)
 - [참조 논문](#참조-논문)
 - [감사의 글](#감사의-글)
@@ -133,7 +137,7 @@ NVIDIA의 Nemotron-H/Nano는 8B/4B 규모, 수천 GPU, 수조 토큰 학습을 �
 | 청크 기반 selective scan | `mamba_chunk_size=256` | ✅ 도입 |
 | MoE (Mixture of Experts) | — | ❌ 포기 (소규모에서 효과 미미) |
 | Knowledge Distillation | — | ❌ 포기 (teacher 모델 부재) |
-| RLHF/DPO 파이프라인 | — | ❌ 포기 (사전학습 단계) |
+| RLHF/DPO 파이프라인 | Native DPO + LoRA (TRL 미사용) | ✅ 도입 (Post-SFT) |
 | 4B/8B 규모 | 2.94B로 축소 | 🔄 스케일 조정 |
 | 수조 토큰 학습 | 55B 토큰 (~1.34 에포크, Chinchilla 93%) | 🔄 스케일 조정 |
 
@@ -228,18 +232,29 @@ EVAFRILL-Mo/
 │   ├── pretrain.py            # 사전학습 엔트리포인트
 │   ├── trainer.py             # 학습 루프 (DDP, FP8, 체크포인팅)
 │   ├── sft.py                 # 지도 미세조정 (SFT)
+│   ├── dpo.py                 # DPO 선호도 학습 (Native, LoRA)
 │   ├── orpo.py                # ORPO 선호도 최적화
 │   └── utils.py               # Cosine 스케줄러, DDP 설정, 체크포인트 유틸
 │
 ├── data/                      # 데이터 파이프라인
 │   ├── dataset.py             # PackedDataset (memmap + MADV_WILLNEED 힌트)
 │   ├── prepare.py             # 토큰화 파이프라인
+│   ├── sft_dataset.py         # SFT 대화형 데이터셋
+│   ├── dpo_dataset.py         # DPO 선호도 쌍 데이터셋
+│   ├── prepare_preference_combined.py  # 7개 preference 소스 → 통합 JSONL
 │   └── *.bin                  # 바이너리 토큰 파일 (저장소에 미포함)
 │
+├── model/                     # 모델 아키텍처 (위와 동일)
+│   └── lora.py                # LoRA 어댑터 (Attention + Mamba 레이어)
+│
 ├── eval/                      # 평가
+│   ├── evafrill_eval.py       # 종합 4-phase 평가 (PPL, 생성, 보정, lm-eval)
 │   ├── perplexity.py          # 퍼플렉시티 평가
 │   ├── generate.py            # 텍스트 생성 / 샘플링
 │   └── comprehensive_eval.py  # 종합 평가 도구
+│
+├── scripts/
+│   ├── merge_checkpoints.py   # SLERP/LERP 체크포인트 보간 (alignment tax 완화)
 │
 ├── configs/                   # YAML 학습 설정 파일
 ├── scripts/                   # 실행, 모니터링, 배포 스크립트
@@ -629,7 +644,7 @@ LLM 사전학습에 vectorDB나 memoryDB가 도움이 되는지 조사했습니�
 - **판단**: 1B에 65시간 투자 시 Chinchilla의 7.5배 과잉학습 → compute 낭비
 - **결정**: step 4,230에서 1B 학습 중단, 3B 규모로 전환
 
-### 6단계 — 3B 최적화 & 본학습 (현재 진행 중)
+### 6단계 — 3B 사전학습 완료
 
 - **모델**: 2,944M 파라미터, 26층 (Mamba-2 24개 + Attention 2개)
 - **벤치마크**: batch=6~12까지 순차 테스트 → batch=6이 Memory Cliff 직전 최대값
@@ -638,21 +653,9 @@ LLM 사전학습에 vectorDB나 memoryDB가 도움이 되는지 조사했습니�
 - **Chinchilla 달성률**: ~93% (1.34 에포크)
 - **체크포인트**: 1,000 step마다 자동 저장 (model + optimizer + scheduler + train_state)
 - **복구 래퍼**: `train_3b_resilient.sh` — 크래시 시 최신 체크포인트에서 자동 재시작 (최대 10회, 포트 자동 변경)
-- **완료 예상**: 2026-03-09 (일) 오후 3시경 (스텝당 ~0.67s, 로그는 10스텝 단위)
+- **완료**: 2026-03-09, 319,772 step 전부 완료. 최종 체크포인트 `checkpoints/3b_final/checkpoint-0319772`
 
-### 현재 학습 상태 (2026-03-09 07:32 기준)
-
-```
-step   278,930 / 319,772 (87.2%)
-loss   1.69  (안정적 수렴 중)
-lr     4.12e-05 (cosine decay 후반부)
-tok/s  36,300 (per-GPU, 안정)
-mem    47.3 GB/GPU (안정)
-gnorm  ~0.38 (안정)
-예상 완료: 2026-03-09 (일) 오후 3시경 (~7.4시간 잔여)
-```
-
-#### Loss 추이 (25k 구간 평균)
+#### 사전학습 Loss 추이 (25k 구간 평균)
 
 | 구간 | 평균 Loss | 변화 |
 |------|--------:|------|
@@ -662,7 +665,322 @@ gnorm  ~0.38 (안정)
 | 100~150k | 2.00 | 안정적 감소 |
 | 150~200k | 1.87 | 점진적 감소 |
 | 200~250k | 1.77 | 점진적 감소 |
-| 250~현재 | 1.69 | 수렴 중 |
+| 250~319k | 1.69 | 수렴 완료 |
+
+### 7단계 — 3B SFT v2 (Early Stop으로 완료)
+
+사전학습 완료된 3B 모델 위에 한국어 SFT(Supervised Fine-Tuning)를 수행했습니다.
+
+#### 환경 전환: B200 8GPU → H100 MIG 1GPU
+
+B200 클러스터 반납 후 H100 MIG 3g.40gb 단일 파티션 환경으로 전환했습니다.
+
+| 항목 | B200 8GPU (사전학습) | H100 MIG (SFT) |
+|------|---------------------|-----------------|
+| GPU | 8× B200 (183GB each) | 1× H100 MIG 3g.40gb (~42GB) |
+| 정밀도 | FP8 (MXFP8) | BF16 + Gradient Checkpointing |
+| 배치 | bs=6 × 7GPU = 42 | bs=4, grad_accum=7, eff=28 |
+| 속도 | 0.67s/step | 6.8s/step |
+
+#### SFT 학습 설정
+
+| 파라미터 | 값 |
+|---------|-----|
+| 베이스 체크포인트 | `checkpoints/3b_final/checkpoint-0319772` |
+| SFT 데이터 | `data/sft_combined/train_filtered.jsonl` |
+| Validation 데이터 | `data/sft_combined/val_filtered.jsonl` |
+| 설정 파일 | `configs/h100_mig/korean_3b_sft_1gpu.yaml` |
+| 런치 스크립트 | `train_3b_sft_1gpu.sh` (resilient wrapper) |
+| batch_size | 4 |
+| grad_accum_steps | 7 |
+| effective batch | 28 |
+| max_steps | 135,000 |
+| eval_interval | 5,000 steps |
+| lr | 7.0e-06 (cosine decay) |
+| warmup_steps | 500 |
+| weight_decay | 0.01 |
+| max_grad_norm | 1.0 |
+| NEFTune alpha | 5.0 |
+| 정밀도 | BF16 + Gradient Checkpointing |
+| VRAM 사용 | 24.0GB / 40.3GB (60%) |
+| 토크나이제이션 | 초기화 시 전체 pre-tokenize + 캐시 |
+
+#### SFT Validation Loss 추이 — 수렴 및 Early Stop 근거
+
+| Step | val_loss | Δval_loss | 구간 |
+|-----:|--------:|---------:|------|
+| 5,000 | 1.8774 | — | 급감기 |
+| 10,000 | 1.8424 | -0.0350 | |
+| 15,000 | 1.8239 | -0.0185 | |
+| 20,000 | 1.8124 | -0.0115 | 감속기 |
+| 25,000 | 1.8050 | -0.0074 | |
+| 30,000 | 1.8001 | -0.0049 | |
+| 35,000 | 1.7968 | -0.0033 | |
+| 40,000 | 1.7949 | -0.0019 | Plateau 진입 |
+| 45,000 | 1.7940 | -0.0009 | |
+| 50,000 | 1.7933 | -0.0007 | |
+| 55,000 | 1.7928 | -0.0005 | |
+| 60,000 | 1.7928 | -0.0000 | 정체 |
+| **65,000** | **1.7924** | **-0.0004** | **Early Stop 결정** |
+
+13회 연속 best 갱신이나, 50K 이후 개선이 측정 노이즈 수준으로 감소.
+
+#### Early Stop 결정 (Step 65,000 / 135,000, 48.15%)
+
+**결정일**: 2026-03-22
+**최종 best val_loss**: 1.7924 (step 65,000)
+**최종 체크포인트**: `checkpoints/3b_sft_v2/checkpoint-best`, `checkpoint-0065059` (emergency)
+
+**중단 근거 — 수학적 분석:**
+
+1. **Asymptote 도달**: 지수 감쇠 피팅(`L = a·exp(-b·t) + c`) 결과, 이론적 최저 val_loss(c) = ~1.7922. 현재 1.7924로 이미 asymptote에 거의 도달 (R² = 0.9994)
+2. **개선량 소멸**: 50K→65K (15,000 steps, ~28시간) 총 개선 0.0009. 남은 70K steps(~5.5일) 예상 개선 0.001~0.003
+3. **PPL 차이 무의미**: val_loss 0.001 차이 = PPL 6.006 → 6.000 (ΔPPL = 0.006). 실제 출력 품질에 체감 불가
+4. **SNR 부족**: 5K-step 단위 측정 노이즈(σ=0.0003) 대비 예상 개선량(0.0002)의 SNR = 0.57σ — 통계적으로 유의하지 않음
+
+**중단 근거 — 실용적 분석:**
+
+1. **기회비용**: 동일 GPU 시간으로 정량 평가(KoBEST/KLUE), 데이터 재구성 후 새 SFT, 또는 DPO/RLHF 수행이 기대 수익 훨씬 높음
+2. **Overfitting 없음**: 전 구간에서 val-train gap이 0.01~0.03 범위로 안정. 단조 증가 없음
+3. **Cosine LR 후반부 효과 소진**: lr이 이미 peak의 53%로 감소, 후반부 급격한 개선 가능성 없음
+
+#### SFT 학습 안정성 지표
+
+| 지표 | 값 | 판정 |
+|------|-----|------|
+| 최대 gnorm | 4.219 (warmup step 140) | 정상 |
+| gnorm > 5 | 0건 | 안전 |
+| nan/inf/OOM | 0건 | 안전 |
+| 메모리 | 24.0GB 전 구간 고정 | 안정 |
+| tok/s 추세 | 평균 5,343, 시간 경과에 따른 감소 없음 | 안정 |
+| SIGTERM 복구 | step 421에서 1회, 정상 재개 | 정상 |
+| epoch | 0 (단일 epoch, 데이터 반복 없음) | 정상 |
+
+---
+
+## SFT (Supervised Fine-Tuning)
+
+### 개요
+
+사전학습 완료된 3B 모델(`checkpoints/3b_final/checkpoint-0319772`)을 한국어 instruction-following 데이터로 SFT를 수행했습니다. H100 MIG 3g.40gb 단일 GPU 환경에서 진행했으며, 수렴 분석을 통해 step 65,000에서 early stop했습니다.
+
+### SFT 데이터
+
+| 항목 | 값 |
+|------|-----|
+| 학습 데이터 | `data/sft_combined/train_filtered.jsonl` |
+| 검증 데이터 | `data/sft_combined/val_filtered.jsonl` |
+| 형식 | 대화형 (conversation) JSONL |
+| 토크나이제이션 | 초기화 시 전체 pre-tokenize + `.sft_cache_*.pt` 캐시 |
+
+### 핵심 기법
+
+| 기법 | 설명 |
+|------|------|
+| **NEFTune** (alpha=5.0) | Embedding에 uniform noise 주입으로 일반화 성능 향상 (Jain et al., 2023) |
+| **Dynamic Padding** | 배치 내 최대 시퀀스 길이에 맞춰 패딩, 64 정렬. 고정 길이 대비 연산 낭비 감소 |
+| **Gradient Checkpointing** | Activation 재계산으로 VRAM 절약. MIG 42GB 제약 하에서 3B 모델 학습 가능 |
+| **Cosine LR Decay** | Peak 7.0e-06에서 cosine 감쇠. 사전학습 lr(3e-4)의 1/43 수준으로 보수적 설정 |
+| **Resilient Wrapper** | `train_3b_sft_1gpu.sh` — SIGTERM/크래시 시 자동 체크포인트 저장 및 재시작 |
+
+### 결과 요약
+
+```
+학습 기간:    2026-03-17 ~ 2026-03-22 (5일)
+진행 steps:   65,000 / 135,000 (48.15%)
+최종 val_loss: 1.7924 (13회 연속 best 갱신)
+중단 사유:    Plateau — asymptote 도달, 추가 학습의 기대 수익 < 측정 노이즈
+체크포인트:   checkpoints/3b_sft_v2/checkpoint-best (step 65,000)
+```
+
+### 수렴 분석 시각화
+
+```
+val_loss
+1.880 ┤ ●
+      │  ╲
+1.860 ┤   ╲
+      │    ╲
+1.840 ┤     ●
+      │      ╲
+1.820 ┤       ●
+      │        ╲
+1.800 ┤         ●──●
+      │              ╲
+1.795 ┤               ●──●──●──●──●──●  ← Plateau
+      │
+1.790 ┤─────────────────────────────────
+      └──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──┬──→ step (×1000)
+         5  10 15 20 25 30 35 40 45 50 55 60 65
+```
+
+- **급감기** (5K~20K): val_loss 1.877 → 1.812, Δ = -0.065
+- **감속기** (20K~35K): val_loss 1.812 → 1.797, Δ = -0.015
+- **Plateau** (35K~65K): val_loss 1.797 → 1.792, Δ = -0.005 (개선폭이 noise 수준)
+
+---
+
+## Post-SFT: 평가 → DPO 파이프라인
+
+SFT v2 완료(step 65,000) 후, 모델 품질 평가와 DPO(Direct Preference Optimization)를 통한 정렬(alignment) 단계입니다.
+
+### SFT 모델 평가 (Phase 2: 생성 품질)
+
+`eval/evafrill_eval.py`를 사용한 4-phase 평가 체계 중 Phase 2(생성 품질)를 완료했습니다.
+
+**평가 환경**: H100 MIG 3g.40gb, batch_size=2
+
+| Phase | 설명 | 상태 | 비고 |
+|-------|------|------|------|
+| Phase 1 (PPL) | Perplexity on 3b_val.bin | ⏭ 스킵 | stride=2048으로도 ~4.4시간 소요, 우선순위 낮음 |
+| Phase 2 (생성) | 15 프롬프트 × 4 디코딩 설정 | ✅ 완료 | ~2.5시간 |
+| Phase 3 (보정) | Calibration curve | ⏭ 스킵 | |
+| Phase 4 (lm-eval) | 6개 벤치마크 (kmmlu 등) | ❌ 중단 | 9시간 후 중단 — 아래 사유 참조 |
+
+**Phase 4 중단 사유:**
+
+lm-eval Phase 4는 6개 벤치마크(`belebele_kor_Hang`, `global_mmlu_full_ko`, `hellaswag`, `arc_easy`, `arc_challenge`, `kmmlu`)를 실행합니다. 이 중 `kmmlu`가 **269개 서브태스크, ~167,000 문제**를 포함하여 전체 ~195,000+ 예제를 처리해야 합니다. H100 MIG 단일 GPU(batch_size=2)에서 이 규모는 **12-18시간** 소요로 추정되어, 9시간 실행 후 중단하고 DPO 학습에 GPU를 할당하기로 결정했습니다.
+
+**Phase 2 생성 품질 결과 (요약):**
+
+```
+체크포인트: checkpoints/3b_sft_v2/checkpoint-best (step 65,059)
+디코딩 설정: greedy, t0.7, t0.7_r1.2, t0.9_r1.1
+```
+
+| 프롬프트 | Greedy 3-gram 반복률 | 평가 |
+|----------|--------------------:|------|
+| 대한민국의 수도는 | 96.85% | 동일 문구 반복 루프 |
+| 양자 컴퓨터란 | 96.85% | 심각한 반복 |
+| 건강한 식습관을 위해서는 | 59.45% | 상대적으로 양호, 영양 관련 내용 생성 |
+| 인공지능이란 | 50.00% | 구조화된 목록 형식이나 반복 존재 |
+| 한국어는 세계에서 | 35.83% | 낮은 반복이나 한영 혼합 깨짐 |
+| **평균** | **~76%** | **DPO로 반복 문제 해결 필요** |
+
+**핵심 발견:**
+- SFT 모델은 한국어 텍스트를 생성하나, **greedy 디코딩에서 심각한 반복 루프** 발생
+- Repetition penalty (1.2)를 적용하면 개선되나 근본적 해결 아님
+- **DPO를 통한 선호도 학습이 반복 억제에 필수적**
+
+### Preference 데이터 준비
+
+`data/prepare_preference_combined.py`로 7개 한국어 preference 데이터셋을 통합 JSONL로 변환했습니다.
+
+| 데이터셋 | 레코드 수 | 형식 |
+|----------|----------:|------|
+| heegyu/orca-math-korean-preference-cleaned | 192,422 | chosen/rejected |
+| nayohan/preference-collection-ko-full | 199,577 | orig_response_A/B + orig_preference |
+| kuotient/orca-math-word-problems-193k-korean | 192,375 | chosen/rejected |
+| FreedomIntelligence/alpaca-gpt4-korean | 49,969 | chosen/rejected |
+| heegyu/orca_ko | 42,989 | chosen/rejected |
+| HAERAE-HUB/KOFFQA-GuardInstruct-v1 | 7,210 | chosen/rejected |
+| jojo0217/korean_rlhf_dataset | 0 | SFT 전용 (preference pair 없음) |
+| **합계** | **684,542 → 504,103** | 토크나이징 후 유효 샘플 수 |
+
+### DPO (Direct Preference Optimization)
+
+#### DPO vs ORPO: 정렬 기법 선택 근거
+
+DPO와 ORPO는 모두 "chosen vs rejected" 선호도 쌍으로 모델을 정렬하는 기법이지만, 구현 방식과 적용 시점이 다릅니다.
+
+| | DPO | ORPO |
+|---|---|---|
+| **Reference 모델** | 필요 (SFT 모델의 logprob) | **불필요** |
+| **VRAM** | 높음 (ref model forward 추가) | 낮음 |
+| **손실 함수** | `log σ(β · (Δchosen - Δrejected))` | SFT loss + λ · odds ratio penalty |
+| **학습 단계** | SFT → DPO (2단계) | **SFT와 동시** (1단계) |
+| **성숙도** | 표준, 검증 많음 | 비교적 신생 (2024) |
+
+**이 프로젝트에서 DPO를 선택한 이유:**
+
+1. **SFT가 이미 완료됨** — ORPO의 최대 장점은 SFT+정렬을 동시에 수행하는 것인데, SFT v2가 step 65,000에서 이미 수렴 완료된 상태. ORPO를 쓰려면 SFT를 처음부터 다시 돌려야 하므로 5일간의 학습이 낭비됨
+2. **LoRA B-zeroing으로 VRAM 단점 해소** — DPO의 "ref model이 필요하여 VRAM이 높다"는 단점을 LoRA B를 임시 0으로 만들어 ref logprob을 계산하는 방식으로 해결. 모델 복제 없이 실측 6.3GB로 동작
+3. **Nemotron-H 논문이 DPO 사용** — 이 프로젝트의 아키텍처 레퍼런스인 Nemotron-H가 2-round DPO + SLERP merge 파이프라인을 사용하므로, 동일 전략을 따름
+
+> **참고:** 만약 처음부터 다시 설계한다면, ORPO로 SFT+정렬을 한번에 하는 것이 더 효율적일 수 있음. 프로젝트에 `train/orpo.py`가 이미 존재하며, 향후 실험 시 활용 가능.
+
+#### 설계 결정
+
+| 결정 | 선택 | 근거 |
+|------|------|------|
+| **정렬 기법** | DPO (ORPO 대신) | SFT 완료 상태에서 ORPO는 이점 없음; Nemotron-H 레퍼런스 |
+| **프레임워크** | Native DPO (TRL 미사용) | TRL은 HF AutoModel 필요 — Hybrid Mamba 미지원 |
+| **파라미터 효율화** | LoRA (rank=32, alpha=64) | ~22GB VRAM → H100 MIG 42GB에 여유 있게 적합 |
+| **Reference 모델** | LoRA B-zeroing | lora_B를 임시 0으로 만들어 ref logprob 계산, 모델 복제 불필요 |
+| **체크포인트 병합** | SLERP interpolation | Nemotron-H 스타일: `slerp(W_sft, W_dpo, α=0.5)`로 alignment tax 완화 |
+
+#### LoRA 어댑터 구성
+
+```
+적용 레이어:    Attention (qkv_proj, out_proj) + Mamba-2 (in_proj, out_proj)
+어댑터 수:      52개
+학습 파라미터:  21,438,464 (전체 2.97B의 0.72%)
+VRAM 사용:     ~6.3GB (MIG 42GB의 15%)
+```
+
+#### 2-Round DPO 전략 (Nemotron-H 스타일)
+
+| | Round 1 | Round 2 |
+|---|---------|---------|
+| **데이터** | 전체 preference (504K 샘플) | 고품질 서브셋 |
+| **Steps** | 3,000 | 2,000 |
+| **Beta** | 0.1 | 0.05 (더 보수적) |
+| **LR** | 5e-7 | 1e-7 |
+| **Warmup** | 100 steps | 50 steps |
+| **Batch** | bs=1 × grad_accum=16 = eff 16 | 동일 |
+
+#### DPO Round 1 학습 현황 (2026-03-23)
+
+```
+시작:        2026-03-23 10:49 UTC
+속도:        ~5.5초/step
+VRAM:        6.3GB / 42GB (안정)
+예상 완료:   ~4.5시간 (약 15:20 UTC)
+
+초기 학습 추이:
+  step  10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
+  step  50 | loss 0.6930 | margin  0.073 | lr 2.5e-07
+  step 100 | loss 0.6855 | margin  0.006 | lr 5.0e-07  (warmup 완료)
+  step 170 | loss 0.6790 | margin  0.015 | lr 4.99e-07
+```
+
+Loss가 0.693(random baseline)에서 꾸준히 하강 중.
+
+#### 실행 방법
+
+```bash
+# DPO Round 1 + Round 2 + SLERP Merge 전체 파이프라인
+bash train_3b_dpo_1gpu.sh
+
+# 또는 개별 실행
+python3 train/dpo.py \
+    --sft_checkpoint checkpoints/3b_sft_v2/checkpoint-best \
+    --dpo_data data/preference/combined_preference.jsonl \
+    --config configs/h100_mig/dpo_3b_1gpu.yaml \
+    --device cuda:0
+
+# SLERP 체크포인트 병합
+python3 scripts/merge_checkpoints.py \
+    --ckpt_a checkpoints/3b_sft_v2/checkpoint-best \
+    --ckpt_b checkpoints/3b_dpo_r1/checkpoint-merged \
+    --output checkpoints/3b_dpo/checkpoint-slerp \
+    --alpha 0.5
+```
+
+#### 로그 모니터링
+
+```bash
+# DPO 학습 step별 loss/margin/lr
+tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/train.log
+
+# 전체 stdout (모델 로딩, 데이터 파싱 포함)
+tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
+```
+
+#### 버그 수정 이력
+
+- **LoRA device mismatch 수정** (`model/lora.py`): `LoRALinear.__init__`에서 `lora_A`/`lora_B` 파라미터가 CPU에 생성되어 GPU의 원본 레이어와 device 불일치 발생. `original.weight.device`/`dtype`을 사용하여 같은 device에 생성하도록 수정.
+- **nayohan preference 파서 추가** (`data/prepare_preference_combined.py`): `orig_response_A/B + orig_preference` 형식의 데이터셋 지원 추가 (기존에는 0건 파싱).
 
 ---
 
@@ -752,3 +1070,5 @@ NVIDIA Nemotron-H 아키텍처에서 영감을 받아 밑바닥부터 직접 구
 *EVAFRILL-Mo — 밑바닥부터, selective scan 하나하나 직접 쌓아올린 3B 하이브리드 모델.*
 
 </div>
+
+> 한국어 | **[English](README.en.md)**
