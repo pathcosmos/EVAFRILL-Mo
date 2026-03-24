@@ -74,5 +74,12 @@ ncloud_backup/
 # SFT data
 data/sft_*.jsonl
 
+# Eval outputs & reports (generated, not source)
+eval/outputs/
+reports/
+
+# HF export (large model files)
+hf_export/
+
 # Do NOT ignore (for clarity):
 # *.py, *.yaml (configs/), *.sh, *.md, tokenizer/merges.txt, CLAUDE.md

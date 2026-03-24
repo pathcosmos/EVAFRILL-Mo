@@ -17,8 +17,11 @@
 ![GPUs](https://img.shields.io/badge/GPUs-7%C3%97%20B200-76B900?logo=nvidia&logoColor=white)
 ![Model](https://img.shields.io/badge/Model-2.94B%20params-blue)
 ![Training](https://img.shields.io/badge/Training-319K%20steps-brightgreen)
+[![HuggingFace](https://img.shields.io/badge/🤗%20Model-pathcosmos%2FEVAFRILL--Mo--3B-yellow)](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
 NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) 아키텍처에서 영감을 받아 밑바닥부터 직접 구현한 **30억 파라미터 하이브리드 Mamba-2 + Transformer** 언어 모델입니다. 7× NVIDIA B200 GPU에서 60시간 Chinchilla-optimal 사전학습을 목표로 설계되었습니다.
+
+**모델 다운로드**: [🤗 HuggingFace Hub](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
 </div>
 

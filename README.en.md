@@ -17,6 +17,9 @@
 ![GPUs](https://img.shields.io/badge/GPUs-7%C3%97%20B200-76B900?logo=nvidia&logoColor=white)
 ![Model](https://img.shields.io/badge/Model-2.94B%20params-blue)
 ![Training](https://img.shields.io/badge/Training-319K%20steps-brightgreen)
+[![HuggingFace](https://img.shields.io/badge/🤗%20Model-pathcosmos%2FEVAFRILL--Mo--3B-yellow)](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
+
+**Model download**: [🤗 HuggingFace Hub](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
 A **3-billion-parameter hybrid Mamba-2 + Transformer** language model implemented from scratch, inspired by the NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) architecture. Designed for Chinchilla-optimal pretraining over 60 hours on 7× NVIDIA B200 GPUs.
 
