@@ -1121,12 +1121,59 @@ Applying `repetition_penalty=1.2` at inference on the SLERP model **dramatically
 
 **Recommended inference settings**: `temperature=0.7, repetition_penalty=1.2` (t0.7_r1.2)
 
+#### Multi-α SLERP Experiment (2026-03-24)
+
+Compared SLERP at α=0.3, 0.5, 0.7 on the same 5 prompts with greedy + rep_penalty=1.2:
+
+| α | SFT weight | DPO weight | Avg repetition |
+|---|-----------|-----------|----------------|
+| 0.3 | 70% | 30% | 9.1% |
+| **0.5** | **50%** | **50%** | **5.8%** (lowest) |
+| 0.7 | 30% | 70% | 7.3% |
+
+**Conclusion**: α=0.5 (Nemotron-H default) is optimal. A 50:50 balance between SFT and DPO is most effective at suppressing repetition.
+
+#### Qualitative Evaluation — Chat Template Conversation Test (2026-03-24)
+
+Tested SLERP (α=0.5) model with the SFT chat template (`<|user|>\n...\n<|assistant|>\n`). Decoding: `temperature=0.7, repetition_penalty=1.2`.
+
+```
+USER: 김치를 만드는 방법을 간단히 알려주세요.
+ASSISTANT: 김치는 한국 요리에서 중요한 역할을 하는 음식으로, 녹색 채소가
+  주재료인 발효 식품이랍니다! 이 음식은 발효 과정을 통해 배추와 무에
+  영양분을 공급하여 건강과 맛의 조화를 추구하는데요...
+
+USER: 인공지능이 무엇인지 쉽게 설명해주세요.
+ASSISTANT: 인공지능(artificial intelligence, AI)은 기계가 스스로 학습하고,
+  의사 결정 능력을 가지고 있는 컴퓨터의 한 종류로, 인간의 지능을 모방하는
+  것을 목표로 합니다...
+
+USER: 건강을 위해 어떤 운동을 하면 좋을까요?
+ASSISTANT: 건강에 좋은 운동은 여러 가지가 있습니다. 먼저, 심폐 지구력과
+  근력 향상을 돕는 실내 자전거 타기와 수영이 추천됩니다. 또한, 필라테스와
+  요가도 훌륭한 운동이 될 것입니다...
+```
+
+**Assessment:**
+
+| Aspect | Rating | Notes |
+|--------|--------|-------|
+| **Repetition** | ✅ Good | Virtually no repetition with rep_penalty=1.2 |
+| **Fluency** | ✅ Good | Natural Korean sentence generation |
+| **Instruction following** | ⚠️ Fair | Attempts to answer questions, but accuracy is low |
+| **Factual accuracy** | ❌ Poor | Hallucinations present (e.g., "Sejong reigned 100+ years") |
+| **Code generation** | ❌ Failed | Meaningless response to Fibonacci code request |
+
+**Summary**: Limited by 3B model scale — **fluent Korean generation** is achievable, but **factual accuracy and complex reasoning** (code generation, etc.) remain weak. This is a fundamental constraint of model size (3B) and training data volume (55B tokens).
+
 **Future improvement directions:**
 1. ~~Repetition penalty decoding~~ → ✅ Confirmed effective
-2. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
-3. **ORPO retry** — Restart from SFT to learn preferences during training
-4. **Multi-α experiment** — Try α=0.3 (70% SFT + 30% DPO) to weight SFT knowledge more heavily
-5. **SFT data quality audit** — Investigate root cause of garbled output on "한국어는 세계에서" type prompts
+2. ~~Multi-α experiment~~ → ✅ α=0.5 confirmed optimal
+3. ~~Qualitative evaluation~~ → ✅ Completed
+4. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
+5. **ORPO retry** — Restart from SFT to learn preferences during training
+6. **SFT data quality audit** — Investigate hallucination and garbled output root causes
+7. **Scale up** — Move to 7B+ models with larger compute budget
 
 #### Execution Commands
 
