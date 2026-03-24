@@ -1084,6 +1084,18 @@ Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greed
 
 **Key finding**: Accuracy difference across all three checkpoints is **within 1%**. DPO and SLERP nearly perfectly preserved SFT knowledge — **alignment tax is negligible**. This demonstrates that the LoRA-based DPO + SLERP merge strategy is effective for knowledge retention.
 
+**SLERP final model benchmarks (limit=500, kmmlu excluded, 0-shot):**
+
+| Benchmark | Accuracy | Random | Note |
+|-----------|:--------:|:------:|------|
+| hellaswag | **34.6%** | 25.0% | English commonsense +9.6pp |
+| arc_easy | **32.0%** | 25.0% | Basic science +7.0pp |
+| global_mmlu_full_ko | 23.7% | 25.0% | Korean domain knowledge weak |
+| belebele_kor_Hang | 23.6% | 25.0% | Korean reading comprehension limited |
+| arc_challenge | 18.2% | 25.0% | Advanced reasoning insufficient |
+
+Limited by 3B model scale — only hellaswag/arc_easy show meaningful improvement over random. Korean benchmarks remain at random level — a fundamental constraint of model size and training data volume.
+
 **Combined assessment (Phase 2 repetition + Phase 4 accuracy):**
 
 | Model | Repetition (↓better) | Accuracy (↑better) | Overall |

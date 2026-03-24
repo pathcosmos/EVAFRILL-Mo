@@ -1084,6 +1084,18 @@ SFT, DPO Round 2, SLERP(α=0.5) 세 체크포인트를 동일 15개 프롬프트
 
 **핵심 발견**: 3개 체크포인트 간 **accuracy 차이가 1% 이내**. DPO와 SLERP가 SFT의 지식을 거의 완벽하게 보존했음을 의미 — **alignment tax가 미미**합니다. 이는 LoRA 기반 DPO + SLERP 병합 전략이 지식 보존 측면에서 효과적이었음을 보여줍니다.
 
+**SLERP 최종 모델 벤치마크 (limit=500, kmmlu 제외, 0-shot):**
+
+| Benchmark | Accuracy | Random | 비고 |
+|-----------|:--------:|:------:|------|
+| hellaswag | **34.6%** | 25.0% | 영어 상식 추론 +9.6pp |
+| arc_easy | **32.0%** | 25.0% | 기초 과학 +7.0pp |
+| global_mmlu_full_ko | 23.7% | 25.0% | 한국어 전문지식은 미흡 |
+| belebele_kor_Hang | 23.6% | 25.0% | 한국어 독해 제한적 |
+| arc_challenge | 18.2% | 25.0% | 고난이도 추론 부족 |
+
+3B 규모 모델의 한계로 hellaswag/arc_easy에서만 random 대비 유의미한 개선. 한국어 벤치마크는 random 수준 — 모델 규모와 학습 데이터 양의 근본적 제약.
+
 **종합 판단 (Phase 2 반복률 + Phase 4 accuracy):**
 
 | 모델 | 반복률 (↓좋음) | accuracy (↑좋음) | 종합 |
