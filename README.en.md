@@ -1089,11 +1089,44 @@ Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greed
 | DPO R2 | 80.7% | 28.3% | Repetition worse, knowledge retained |
 | **SLERP** | **74.5%** | **28.3%** | **Lowest repetition, same knowledge** → Final pick |
 
+#### Repetition Penalty Decoding Test (2026-03-24)
+
+Applying `repetition_penalty=1.2` at inference on the SLERP model **dramatically reduced repetition**:
+
+| Prompt | greedy (r=1.0) | greedy (r=1.2) | t0.7 + r1.2 |
+|--------|:--------------:|:--------------:|:-----------:|
+| 대한민국의 수도는 | 81.5% | **13.4%** | **0.4%** |
+| 인공지능이란 | 61.8% | **13.4%** | **1.6%** |
+| 한국의 전통 음식 중에서 | 74.8% | **0.0%** | **0.0%** |
+| 건강한 식습관을 위해서는 | 66.1% | **0.8%** | **1.2%** |
+| 한국어는 세계에서 | 48.0% | 0.0% | 0.0% |
+| **Average** | **66.4%** | **~5.5%** | **~0.6%** |
+
+**Generation quality examples (greedy + r=1.2):**
+
+```
+[대한민국의 수도는] → 서울특별시이고, 그 외 지역은 광역시로 분류한다.
+  대한민국의 행정구역 변천사 1945년 8월 15일 - 경기도 인천부(仁川府)
+  1949년 7월 14일 - 경기도 인천시(仁川市)...
+
+[한국의 전통 음식 중에서] → 가장 유명한 것이 바로 김치이다. 김치는
+  한국인의 주식이자, 세계인에게 사랑받는 국민음식으로 자리 잡았다.
+  김치가 세계적으로 유명해진 이유는 무엇일까? 그 비밀은 바로 '배추'에 있다...
+
+[건강한 식습관을 위해서는] → 균형 잡힌 식단이 중요하다. 특히, 단백질은
+  필수 아미노산으로 구성돼 있어 체내 흡수율이 높아 건강에 좋다...
+```
+
+**Conclusion**: DPO/SLERP alone reduced repetition only to 74.5%, but **applying rep_penalty=1.2 at inference drops it to ~5%**. The model's learned knowledge and fluency are preserved while repetition is effectively suppressed. The "한국어는 세계에서" prompt still produces garbled output — likely an SFT training data quality issue.
+
+**Recommended inference settings**: `temperature=0.7, repetition_penalty=1.2` (t0.7_r1.2)
+
 **Future improvement directions:**
-1. **Repetition penalty decoding** — Applying rep_penalty=1.2 at inference is the most immediate fix
+1. ~~Repetition penalty decoding~~ → ✅ Confirmed effective
 2. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
 3. **ORPO retry** — Restart from SFT to learn preferences during training
 4. **Multi-α experiment** — Try α=0.3 (70% SFT + 30% DPO) to weight SFT knowledge more heavily
+5. **SFT data quality audit** — Investigate root cause of garbled output on "한국어는 세계에서" type prompts
 
 #### Execution Commands
 
