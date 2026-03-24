@@ -102,6 +102,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-phase2", action="store_true")
     parser.add_argument("--skip-phase3", action="store_true")
     parser.add_argument("--skip-phase4", action="store_true")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Limit examples per lm-eval task (for fast testing)")
+    parser.add_argument("--exclude-tasks", type=str, default=None,
+                        help="Comma-separated lm-eval tasks to exclude (e.g. kmmlu)")
     return parser.parse_args()
 
 
@@ -377,7 +381,7 @@ def run_phase3(checkpoint: str) -> Dict:
 # Phase 4: lm-eval 벤치마크 (커스텀 래퍼)
 # ===========================================================================
 
-def run_phase4(checkpoint: str) -> Dict:
+def run_phase4(checkpoint: str, limit: int = None, exclude_tasks: str = None) -> Dict:
     print("\n" + "=" * 60)
     print("Phase 4: lm-eval 벤치마크")
     print("=" * 60)
@@ -541,8 +545,15 @@ def run_phase4(checkpoint: str) -> Dict:
         "kmmlu",
     ]
 
+    if exclude_tasks:
+        excluded = {t.strip() for t in exclude_tasks.split(",")}
+        tasks = [t for t in tasks if t not in excluded]
+        print(f"  제외: {', '.join(excluded)}")
+
     print(f"  태스크: {', '.join(tasks)}")
     print("  (belebele/mmlu: 한국어, hellaswag/arc: 영어)")
+    if limit:
+        print(f"  limit: {limit} examples/task")
 
     try:
         results = evaluator.simple_evaluate(
@@ -551,6 +562,7 @@ def run_phase4(checkpoint: str) -> Dict:
             num_fewshot=0,
             batch_size=2,
             log_samples=False,
+            limit=limit,
         )
         return results.get("results", {})
     except Exception as e:
@@ -717,7 +729,8 @@ def main():
         calib_results = run_phase3(args.checkpoint)
 
     if not args.skip_phase4:
-        bench_results = run_phase4(args.checkpoint)
+        bench_results = run_phase4(args.checkpoint, limit=args.limit,
+                                    exclude_tasks=args.exclude_tasks)
 
     elapsed = time.time() - t_start
     report_path = generate_report(

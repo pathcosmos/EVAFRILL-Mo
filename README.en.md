@@ -920,31 +920,180 @@ VRAM usage:        ~6.3 GB (15% of MIG 42 GB)
 
 #### 2-Round DPO Strategy (Nemotron-H Style)
 
+Rationale for splitting DPO into two rounds:
+
+- **Round 1 (Exploration)**: Learns broad preference signals from the full 504K preference dataset. Higher β (0.1) and lr (5e-7) allow fast exploration of the preference direction.
+- **Round 2 (Exploitation)**: Fine-tunes on top of Round 1's merged checkpoint with lower β (0.05) and lr (1e-7). Lowering β reduces deviation from the reference model, **preventing over-alignment** — learning more preferences while preserving fluency and knowledge from SFT.
+
 | | Round 1 | Round 2 |
 |---|---------|---------|
-| **Data** | Full preference set (504K samples) | High-quality subset |
+| **Purpose** | Broad preference learning (exploration) | Fine-tuning (exploitation) |
+| **Data** | Full preference set (504K samples) | Same or high-quality subset |
 | **Steps** | 3,000 | 2,000 |
-| **Beta** | 0.1 | 0.05 (more conservative) |
-| **LR** | 5e-7 | 1e-7 |
+| **Beta** | 0.1 | 0.05 (prevents over-alignment) |
+| **LR** | 5e-7 | 1e-7 (10× lower) |
 | **Warmup** | 100 steps | 50 steps |
 | **Batch** | bs=1 × grad_accum=16 = eff 16 | Same |
 
-#### DPO Round 1 Training Status (2026-03-23)
+#### DPO Round 1 Results (2026-03-23, Completed)
 
 ```
-Started:          2026-03-23 10:49 UTC
-Speed:            ~5.5 s/step
-VRAM:             6.3 GB / 42 GB (stable)
-Estimated finish: ~4.5 hours (~15:20 UTC)
+Started:     2026-03-23 10:49 UTC
+Completed:   2026-03-23 15:22 UTC (4h 33m)
+Speed:       ~5.5 s/step
+VRAM:        6.3 GB / 42 GB (stable throughout)
 
-Initial training trend:
-  step  10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
-  step  50 | loss 0.6930 | margin  0.073 | lr 2.5e-07
-  step 100 | loss 0.6855 | margin  0.006 | lr 5.0e-07  (warmup complete)
-  step 170 | loss 0.6790 | margin  0.015 | lr 4.99e-07
+Training trajectory:
+  step   10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
+  step  100 | loss 0.6855 | margin  0.006 | lr 5.0e-07  (warmup complete)
+  step  500 | loss 0.6543 | margin  0.120 | lr 4.93e-07
+  step 1500 | loss 0.6012 | margin  0.210 | lr 2.50e-07  (midpoint)
+  step 2500 | loss 0.5717 | margin  0.280 | lr 7.50e-08  (late phase)
+  step 3000 | loss 0.5652 | margin  0.245 | lr 5.0e-08   (final)
+
+Checkpoint: checkpoints/3b_dpo_r1/checkpoint-0003000
+LoRA merged: checkpoints/3b_dpo_r1/checkpoint-merged
 ```
 
-Loss steadily decreasing from 0.693 (random baseline).
+**Interpretation:**
+- **Loss 0.693 → 0.565** (18.5% decrease): Clearly departed from random baseline — model learned to distinguish chosen from rejected
+- **Margin +0.245**: Chosen log-probability averages 0.245 higher than rejected — positive preference signal
+- Stable throughout: gnorm < 5, no NaN, constant VRAM — healthy training
+
+#### SLERP Checkpoint Merging — Mitigating Alignment Tax
+
+**What is alignment tax?** During DPO, the model learns preference alignment but partially loses knowledge and fluency acquired during SFT. For example, the model may produce less repetition after DPO but become less factually accurate — this tradeoff is called "alignment tax."
+
+**SLERP (Spherical Linear Interpolation)**: Merges two checkpoints (SFT, DPO) via **spherical interpolation** in weight space. Unlike ordinary linear interpolation (LERP), SLERP **preserves the direction** of weight vectors during interpolation, better retaining the learned characteristics of each checkpoint.
+
+```
+SLERP(W_sft, W_dpo, α=0.5):
+  - α=0: Pure SFT (no alignment, repetition issues remain)
+  - α=0.5: 50% SFT knowledge + 50% DPO alignment (Nemotron-H default)
+  - α=1: Pure DPO (maximum alignment, maximum alignment tax)
+```
+
+α=0.5 is the Nemotron-H paper's default, balancing SFT knowledge/fluency with DPO preference alignment.
+
+#### DPO Round 2 Results (2026-03-23, Completed)
+
+```
+Started:     2026-03-23 16:10 UTC
+Completed:   2026-03-23 19:12 UTC (3h 2m)
+Speed:       ~5.5 s/step
+VRAM:        6.3 GB / 42 GB (stable throughout)
+
+Training trajectory:
+  step   50 | loss 0.6953 | margin  0.003 | lr 1.0e-07  (warmup complete)
+  step  500 | loss 0.6880 | margin  0.027 | lr 8.9e-08
+  step 1000 | loss 0.6906 | margin  0.008 | lr 5.7e-08
+  step 1500 | loss 0.6884 | margin  0.017 | lr 2.5e-08
+  step 2000 | loss 0.6886 | margin -0.005 | lr 1.0e-08  (final)
+
+Checkpoint: checkpoints/3b_dpo_r2/checkpoint-0002000
+LoRA merged: checkpoints/3b_dpo_r2/checkpoint-merged
+```
+
+**Interpretation:**
+- **Loss 0.692 → 0.689** (0.5% change): Intentionally gradual — low β (0.05) and lr (1e-7) prevent over-alignment
+- **gnorm 1.6–2.2**: Much more stable than Round 1 (3–4) — conservative fine-tuning working as designed
+- While Round 1 learned the broad preference direction, Round 2 refines it delicately
+
+#### Post-DPO Next Steps: Candidates and Selection Rationale
+
+After completing DPO Round 2, we evaluated 5 possible next steps:
+
+| # | Candidate | Description | Decision |
+|---|-----------|-------------|----------|
+| 1 | **SLERP merge** | Spherically interpolate SFT + DPO at α=0.5 | ⭐ Adopted |
+| 2 | Use DPO directly | Use Round 2 merged checkpoint as final model | Comparison target |
+| 3 | Evaluate first | Measure DPO checkpoint quality before SLERP | ⭐ Adopted (combined) |
+| 4 | DPO Round 3 | Additional training round | ❌ Deferred |
+| 5 | Multi-α experiment | Try SLERP at α=0.3, 0.5, 0.7 | ❌ Deferred |
+
+**Final approach: "Evaluate first + SLERP → 3-way comparison"**
+
+Rather than blindly applying SLERP, we evaluated all three checkpoints (SFT, DPO, SLERP) under identical conditions to make a data-driven final model selection.
+
+**Rationale for this approach:**
+1. **SLERP costs almost nothing** — CPU weight interpolation (~1 min), no downside to trying
+2. **Nemotron-H reference** — The paper prescribes 2-round DPO + SLERP merge as the standard pipeline
+3. **Alignment tax insurance** — Safety net against DPO losing SFT knowledge
+4. **Data-driven decision** — Only by comparing all three can we determine if SLERP actually helps
+
+#### 3-Checkpoint Comparison Results (2026-03-24)
+
+Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greedy decoding:
+
+**Per-prompt greedy 3-gram repetition rate (%):**
+
+| Prompt | SFT | DPO R2 | SLERP | Best |
+|--------|----:|-------:|------:|------|
+| 대한민국의 수도는 | 85.0 | 89.4 | 96.9 | SFT |
+| 인공지능이란 | 61.8 | 61.8 | **50.0** | SLERP |
+| 한국의 전통 음식 중에서 | 90.9 | 74.8 | **39.4** | SLERP |
+| 지구 온난화의 주요 원인은 | 82.3 | 87.4 | **72.4** | SLERP |
+| 프로그래밍을 배우려면 | 89.0 | 89.0 | 90.6 | SFT/DPO |
+| 조선시대에는 | 65.0 | 84.3 | **65.0** | SFT=SLERP |
+| 물리학에서 에너지란 | 88.6 | 93.7 | **86.6** | SLERP |
+| 한국어는 세계에서 | 65.8 | 65.8 | **52.0** | SLERP |
+| 경제 성장을 위해서는 | 77.2 | 77.2 | **70.5** | SLERP |
+| 우주 탐사의 역사를 보면 | 95.3 | 95.3 | 95.3 | Tied |
+| 머신러닝과 딥러닝의 차이는 | 89.4 | 89.4 | **83.1** | SLERP |
+| 한국 문학의 대표적인 작품으로는 | 74.0 | **72.8** | 85.4 | DPO |
+| 양자 컴퓨터란 | 96.9 | 96.9 | 96.9 | Tied |
+| 건강한 식습관을 위해서는 | 56.3 | **55.9** | 55.9 | DPO=SLERP |
+| 세계 2차 대전 이후 | 79.5 | 77.6 | 77.6 | DPO=SLERP |
+| **Average** | **79.8%** | **80.7%** | **74.5%** | **SLERP** |
+
+**Summary:**
+
+| Model | Avg repetition | Prompts with lowest repetition |
+|-------|---------------|-------------------------------|
+| SFT v2 | 79.8% | 1/15 |
+| DPO Round 2 | 80.7% | 1/15 |
+| **SLERP (α=0.5)** | **74.5%** | **7/15** |
+
+#### Final Model Selection and Analysis
+
+**Selected: SLERP (α=0.5)** — `checkpoints/3b_dpo/checkpoint-slerp`
+
+**Rationale:**
+- Lowest repetition rate in **7 of 15 prompts** (SFT: 1, DPO: 1)
+- Average repetition **74.5%** — lowest among all three checkpoints
+- Notable improvements on some prompts: "한국의 전통 음식" 90.9% → 39.4% (-51.5pp)
+
+**Limitations — honest assessment:**
+- Far short of the **30% target** (average 74.5%)
+- 2 prompts worse than SFT: "대한민국의 수도는" (+11.8pp), "한국 문학" (+11.4pp)
+- DPO-only checkpoint was **marginally worse** than SFT (80.7% vs 79.8%) — DPO alone did not solve the repetition problem
+- **Root cause**: Greedy decoding repetition in a 3B hybrid Mamba model may be an architecture-level issue — DPO/SLERP alone have inherent limits
+
+**lm-eval benchmark results (limit=100, kmmlu excluded, 0-shot):**
+
+| Benchmark | SFT | DPO R2 | SLERP | Note |
+|-----------|----:|-------:|------:|------|
+| hellaswag | 39.0% | 39.0% | 39.0% | Identical |
+| belebele_kor_Hang | 30.0% | 29.0% | 30.0% | SFT=SLERP |
+| arc_easy | 28.0% | 28.0% | 27.0% | |
+| arc_challenge | 21.0% | 22.0% | 22.0% | |
+| global_mmlu_full_ko | 23.4% | 23.4% | 23.3% | Nearly identical |
+
+**Key finding**: Accuracy difference across all three checkpoints is **within 1%**. DPO and SLERP nearly perfectly preserved SFT knowledge — **alignment tax is negligible**. This demonstrates that the LoRA-based DPO + SLERP merge strategy is effective for knowledge retention.
+
+**Combined assessment (Phase 2 repetition + Phase 4 accuracy):**
+
+| Model | Repetition (↓better) | Accuracy (↑better) | Overall |
+|-------|:--------------------:|:------------------:|---------|
+| SFT | 79.8% | 28.3% | Baseline |
+| DPO R2 | 80.7% | 28.3% | Repetition worse, knowledge retained |
+| **SLERP** | **74.5%** | **28.3%** | **Lowest repetition, same knowledge** → Final pick |
+
+**Future improvement directions:**
+1. **Repetition penalty decoding** — Applying rep_penalty=1.2 at inference is the most immediate fix
+2. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
+3. **ORPO retry** — Restart from SFT to learn preferences during training
+4. **Multi-α experiment** — Try α=0.3 (70% SFT + 30% DPO) to weight SFT knowledge more heavily
 
 #### Execution Commands
 

@@ -73,6 +73,8 @@ The 3B SFT v2 training conducted with `h100_mig/korean_3b_sft_1gpu.yaml` complet
 ```
 
 Fine-tuning with more conservative settings. Uses merged checkpoint from Round 1 as base.
+β lowered from 0.1→0.05 to reduce deviation from reference model, preventing over-alignment.
+lr reduced 10× (5e-7→1e-7) to preserve SFT knowledge while fine-tuning preferences.
 
 ### VRAM Budget (measured)
 
@@ -88,9 +90,10 @@ Total:                 ~6.3 GB / 42.3 GB (15%)
 ## Usage
 
 ```bash
-# H100 MIG — SFT v2 complete, DPO in progress
+# H100 MIG — SFT v2 complete, DPO R1+R2 complete, SLERP merged
 bash train_3b_sft_1gpu.sh   # SFT (complete)
-bash train_3b_dpo_1gpu.sh   # DPO Round 1 + 2 + SLERP Merge
+bash train_3b_dpo_1gpu.sh   # DPO Round 1 + 2 + SLERP Merge (complete)
+# Final model: checkpoints/3b_dpo/checkpoint-slerp
 
 # B200 8GPU (previous environment)
 bash scripts/b200_8gpu/launch_3b_sft.sh

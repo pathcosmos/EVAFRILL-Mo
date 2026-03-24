@@ -73,6 +73,8 @@ Launch scripts: `train_3b_sft_1gpu.sh`, `train_3b_dpo_1gpu.sh` (project root)
 ```
 
 더 보수적인 설정으로 정밀 조정. Round 1의 merged 체크포인트를 base로 사용.
+β를 0.1→0.05로 낮춰 reference model에서 덜 벗어나게 하여 over-alignment 방지.
+lr을 10배 낮춰(5e-7→1e-7) SFT 지식을 보존하면서 선호도를 미세 조정.
 
 ### VRAM 예산 (실측)
 
@@ -88,9 +90,10 @@ Total:                 ~6.3 GB / 42.3 GB (15%)
 ## Usage
 
 ```bash
-# H100 MIG — SFT v2 완료, DPO 진행 중
+# H100 MIG — SFT v2 완료, DPO R1+R2 완료, SLERP 병합 완료
 bash train_3b_sft_1gpu.sh   # SFT (완료)
-bash train_3b_dpo_1gpu.sh   # DPO Round 1 + 2 + SLERP Merge
+bash train_3b_dpo_1gpu.sh   # DPO Round 1 + 2 + SLERP Merge (완료)
+# 최종 모델: checkpoints/3b_dpo/checkpoint-slerp
 
 # B200 8GPU (previous environment)
 bash scripts/b200_8gpu/launch_3b_sft.sh
