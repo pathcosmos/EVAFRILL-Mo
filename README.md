@@ -1226,6 +1226,34 @@ tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
 - **LoRA device mismatch 수정** (`model/lora.py`): `LoRALinear.__init__`에서 `lora_A`/`lora_B` 파라미터가 CPU에 생성되어 GPU의 원본 레이어와 device 불일치 발생. `original.weight.device`/`dtype`을 사용하여 같은 device에 생성하도록 수정.
 - **nayohan preference 파서 추가** (`data/prepare_preference_combined.py`): `orig_response_A/B + orig_preference` 형식의 데이터셋 지원 추가 (기존에는 0건 파싱).
 
+#### 배포 및 추론
+
+**모델 다운로드**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
+
+**Gradio 데모 서버:**
+```bash
+python3 demo/app.py  # http://localhost:7860
+```
+
+**GGUF/Ollama 변환 — 현재 불가능:**
+
+이 모델은 **커스텀 하이브리드 Mamba-2 + Transformer** 아키텍처이므로, llama.cpp 기반의 GGUF/Ollama 변환이 불가능합니다.
+
+| 구분 | 지원 여부 | 사유 |
+|------|----------|------|
+| **llama.cpp/GGUF** | ❌ 불가 | 순수 Mamba-2만 실험적 지원(CPU only), 하이브리드 미지원 |
+| **Ollama** | ❌ 불가 | llama.cpp 기반이므로 동일 제약 |
+| **vLLM** | ⚠️ 이론상 가능 | Mamba2ForCausalLM 지원하나, 커스텀 가중치 키 매핑 필요 (수일 작업) |
+| **Gradio (순수 Python)** | ✅ 작동 중 | `demo/app.py` |
+
+**기술적 장벽:**
+- SSM 상태(Mamba)와 KV 캐시(Attention)를 동시에 관리하는 표준이 GGUF에 없음
+- `mamba_ssm` CUDA 커널이 llama.cpp에 미구현
+- llama.cpp는 정적 레이어 타입만 지원 — 하이브리드 디스패치 불가
+- NVIDIA Nemotron-H (동일 아키텍처 계열)도 같은 문제로 GGUF 변환에 어려움 ([llama.cpp #20570](https://github.com/ggml-org/llama.cpp/issues/20570))
+
+> **참고:** 이 제약은 커스텀 하이브리드 아키텍처를 선택한 트레이드오프입니다. 성능과 연구 유연성을 위해 포터빌리티를 일부 양보한 것이며, vLLM이나 순수 Python 추론으로 충분히 서빙 가능합니다.
+
 ---
 
 ## 벤치마크 결과

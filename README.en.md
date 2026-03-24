@@ -1226,6 +1226,34 @@ tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
 - **LoRA device mismatch fix** (`model/lora.py`): `lora_A`/`lora_B` parameters in `LoRALinear.__init__` were created on CPU, causing device mismatch with the original layer on GPU. Fixed by using `original.weight.device`/`dtype` to create them on the same device.
 - **nayohan preference parser added** (`data/prepare_preference_combined.py`): Added support for datasets in `orig_response_A/B + orig_preference` format (previously parsed 0 records).
 
+#### Deployment and Inference
+
+**Model download**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
+
+**Gradio demo server:**
+```bash
+python3 demo/app.py  # http://localhost:7860
+```
+
+**GGUF/Ollama conversion — currently not possible:**
+
+This model uses a **custom hybrid Mamba-2 + Transformer** architecture, making llama.cpp-based GGUF/Ollama conversion impossible.
+
+| Tool | Support | Reason |
+|------|---------|--------|
+| **llama.cpp/GGUF** | ❌ No | Only experimental pure Mamba-2 (CPU only), hybrid unsupported |
+| **Ollama** | ❌ No | Built on llama.cpp, same limitations |
+| **vLLM** | ⚠️ Theoretically | Supports Mamba2ForCausalLM, but requires custom weight key mapping (days of work) |
+| **Gradio (pure Python)** | ✅ Running | `demo/app.py` |
+
+**Technical barriers:**
+- No standardized way to manage SSM state (Mamba) + KV cache (Attention) simultaneously in GGUF
+- `mamba_ssm` CUDA kernels not implemented in llama.cpp
+- llama.cpp only supports static layer types — hybrid dispatch not possible
+- NVIDIA Nemotron-H (same architecture family) faces the same GGUF conversion issues ([llama.cpp #20570](https://github.com/ggml-org/llama.cpp/issues/20570))
+
+> **Note:** This is a deliberate tradeoff of choosing a custom hybrid architecture — performance and research flexibility over portability. The model can be served via vLLM or the pure Python inference server.
+
 ---
 
 ## Benchmark Results
