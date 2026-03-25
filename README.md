@@ -76,7 +76,7 @@ EVAFRILL-Mo는 **하이브리드 SSM-Transformer** 언어 모델을 밑바닥부
 
 ## 아키텍처
 
-### 3B 모델 구성 (현재 학습 중)
+### 3B 모델 구성 (학습 완료)
 
 ```
 vocab_size:        64,000
@@ -237,7 +237,8 @@ EVAFRILL-Mo/
 │   ├── transformer.py         # LLM 메인 모델 (하이브리드 레이어 디스패처)
 │   ├── mamba_block.py         # Mamba-2 SSM + 선택적 SwiGLU FFN
 │   ├── attention.py           # RoPE가 적용된 GQA 어텐션
-│   └── layers.py              # RMSNorm, SwiGLU, 임베딩
+│   ├── layers.py              # RMSNorm, SwiGLU, 임베딩
+│   └── lora.py                # LoRA 어댑터 (Attention + Mamba 레이어)
 │
 ├── train/                     # 학습
 │   ├── pretrain.py            # 사전학습 엔트리포인트
@@ -255,9 +256,6 @@ EVAFRILL-Mo/
 │   ├── prepare_preference_combined.py  # 7개 preference 소스 → 통합 JSONL
 │   └── *.bin                  # 바이너리 토큰 파일 (저장소에 미포함)
 │
-├── model/                     # 모델 아키텍처 (위와 동일)
-│   └── lora.py                # LoRA 어댑터 (Attention + Mamba 레이어)
-│
 ├── eval/                      # 평가
 │   ├── evafrill_eval.py       # 종합 4-phase 평가 (PPL, 생성, 보정, lm-eval)
 │   ├── perplexity.py          # 퍼플렉시티 평가
@@ -273,8 +271,10 @@ EVAFRILL-Mo/
 ├── tokenizer/                 # SentencePiece 토크나이저 학습
 ├── reports/                   # 평가 및 분석 리포트
 ├── docs/                      # 하드웨어 & 환경 문서
-├── train_1b_resilient.sh      # 1B 자동 재시작 학습 래퍼
-└── train_3b_resilient.sh      # 3B 자동 재시작 학습 래퍼 (현재 사용 중)
+├── train_3b_sft_1gpu.sh       # H100 MIG SFT 런치 스크립트
+├── train_3b_dpo_1gpu.sh       # H100 MIG DPO 런치 스크립트
+├── train_3b_orpo_1gpu.sh      # H100 MIG ORPO 런치 스크립트
+└── demo/app.py                # Gradio 데모 서버
 ```
 
 ---

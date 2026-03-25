@@ -55,7 +55,6 @@ A **3-billion-parameter hybrid Mamba-2 + Transformer** language model implemente
 - [3B Hardware Constraint Optimization](#3b-hardware-constraint-optimization)
 - [Training Data](#training-data)
 - [Development History](#development-history)
-- [Benchmark Results](#benchmark-results)
 - [SFT (Supervised Fine-Tuning)](#sft-supervised-fine-tuning)
 - [Model Alignment & Evaluation](#model-alignment--evaluation)
   - [SFT Model Evaluation Results](#sft-model-evaluation-results)
@@ -66,9 +65,10 @@ A **3-billion-parameter hybrid Mamba-2 + Transformer** language model implemente
   - [Deployment & Inference](#deployment--inference)
   - [Future Improvement Directions](#future-improvement-directions)
 - [Appendix: Execution Guide](#appendix-execution-guide)
+- [Benchmark Results](#benchmark-results)
 - [Related Projects](#related-projects)
 - [References](#references)
-- [Acknowledgements](#acknowledgements)
+- [Acknowledgments](#acknowledgments)
 - [License](#license)
 
 ---
@@ -91,7 +91,7 @@ EVAFRILL-Mo is a project that implements a **hybrid SSM-Transformer** language m
 
 ## Architecture
 
-### 3B Model Configuration (currently training)
+### 3B Model Configuration (training complete)
 
 ```
 vocab_size:        64,000
@@ -252,7 +252,8 @@ EVAFRILL-Mo/
 │   ├── transformer.py         # LLM main model (hybrid layer dispatcher)
 │   ├── mamba_block.py         # Mamba-2 SSM + optional SwiGLU FFN
 │   ├── attention.py           # GQA attention with RoPE
-│   └── layers.py              # RMSNorm, SwiGLU, embeddings
+│   ├── layers.py              # RMSNorm, SwiGLU, embeddings
+│   └── lora.py                # LoRA adapter (Attention + Mamba layers)
 │
 ├── train/                     # Training
 │   ├── pretrain.py            # Pretraining entrypoint
@@ -270,9 +271,6 @@ EVAFRILL-Mo/
 │   ├── prepare_preference_combined.py  # 7 preference sources → unified JSONL
 │   └── *.bin                  # Binary token files (not included in repo)
 │
-├── model/                     # Model architecture (same as above)
-│   └── lora.py                # LoRA adapter (Attention + Mamba layers)
-│
 ├── eval/                      # Evaluation
 │   ├── evafrill_eval.py       # Comprehensive 4-phase evaluation (PPL, generation, calibration, lm-eval)
 │   ├── perplexity.py          # Perplexity evaluation
@@ -288,8 +286,10 @@ EVAFRILL-Mo/
 ├── tokenizer/                 # SentencePiece tokenizer training
 ├── reports/                   # Evaluation and analysis reports
 ├── docs/                      # Hardware & environment documentation
-├── train_1b_resilient.sh      # 1B auto-restart training wrapper
-└── train_3b_resilient.sh      # 3B auto-restart training wrapper (currently in use)
+├── train_3b_sft_1gpu.sh       # H100 MIG SFT launch script
+├── train_3b_dpo_1gpu.sh       # H100 MIG DPO launch script
+├── train_3b_orpo_1gpu.sh      # H100 MIG ORPO launch script
+└── demo/app.py                # Gradio demo server
 ```
 
 ---
