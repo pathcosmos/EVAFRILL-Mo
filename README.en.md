@@ -1247,9 +1247,33 @@ Minimal loss change (0.693→0.691). The model was already well-aligned via SLER
 
 Checkpoint: `checkpoints/3b_dpo_r3/checkpoint-merged`
 
-#### Analysis
+#### Evaluation Results
 
-105 repetition-targeted pairs represent only 0.015% of the total 684K dataset — too diluted to meaningfully influence model behavior. Evaluation needed to confirm actual repetition rate changes.
+**Greedy repetition comparison (15-prompt average):**
+
+| Model | Greedy repetition | rep_penalty=1.2 (5p) |
+|-------|:-----------------:|:-------------------:|
+| SLERP (α=0.5) | **74.5%** | **5.8%** |
+| DPO R3 (repetition-targeted) | 79.4% | 4.5% |
+
+**Per-prompt detail (greedy + rep_penalty=1.2):**
+
+| Prompt | SLERP r1.2 | R3 r1.2 |
+|--------|:----------:|:-------:|
+| 대한민국의 수도는 | 13.4% | **0.4%** |
+| 인공지능이란 | **13.4%** | 13.8% |
+| 한국의 전통 음식 | 0.0% | 0.0% |
+| 건강한 식습관 | **0.8%** | 7.5% |
+| 프로그래밍을 배우려면 | 1.6% | **0.8%** |
+
+#### Analysis and Conclusion
+
+**DPO R3 shows no significant improvement over SLERP.**
+
+- Greedy repetition: SLERP 74.5% → R3 79.4% (**actually worsened**)
+- rep_penalty=1.2: SLERP 5.8% → R3 4.5% (marginal improvement)
+- **Root cause**: 105 repetition-targeted pairs are only 0.015% of 684K — too diluted to affect behavior
+- **Lesson**: Self-generated preference data needs thousands to tens of thousands of pairs minimum. ~100 pairs are buried in 684K existing data
 
 ---
 
