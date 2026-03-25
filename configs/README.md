@@ -38,6 +38,7 @@ H100 MIG 3g.40gb 단일 파티션 환경용 설정. BF16 + Gradient Checkpointin
 |--------|-------------|
 | `korean_3b_sft_1gpu.yaml` | 3B SFT v2, single GPU, bs=4, grad_accum=7, NEFTune alpha=5.0 |
 | `dpo_3b_1gpu.yaml` | 3B DPO Round 1, LoRA rank=32, beta=0.1, lr=5e-7, eff_batch=16 |
+| `orpo_3b_1gpu.yaml` | 3B ORPO, LoRA rank=32, λ=1.0, lr=5e-6, 10K steps (실험적) |
 
 Launch scripts: `train_3b_sft_1gpu.sh`, `train_3b_dpo_1gpu.sh` (project root)
 

@@ -1186,9 +1186,99 @@ ASSISTANT: 건강에 좋은 운동은 여러 가지가 있습니다. 먼저, 심
 2. ~~다중 α 실험~~ → ✅ α=0.5 최적 확인
 3. ~~정성적 평가~~ → ✅ 완료
 4. **더 큰 규모의 preference 데이터** — 반복 vs 비반복 쌍을 명시적으로 포함
-5. **ORPO 재시도** — SFT부터 다시 시작하여 학습 단계에서 선호도를 동시에 학습
+5. ~~ORPO 재시도~~ → ✅ 실험 완료 (아래 참조)
 6. **SFT 데이터 품질 점검** — hallucination 및 비정상 출력 원인 조사
 7. **모델 규모 확대** — 더 큰 compute budget 확보 시 7B+ 규모로 스케일업
+
+---
+
+### ORPO 실험: SFT→DPO→SLERP vs ORPO 비교 (2026-03-25)
+
+#### 실험 동기
+
+DPO가 반복 문제를 직접 해결하지 못했음 (SFT 79.8% → DPO 80.7%, 오히려 악화). ORPO는 SFT+정렬을 **동시에 학습**하므로, 분리된 파이프라인의 구조적 한계를 극복할 수 있는지 검증하기 위해 실험.
+
+#### ORPO란?
+
+ORPO (Odds Ratio Preference Optimization, Hong et al., 2024)는 SFT loss와 선호도 loss를 하나의 목적함수로 결합:
+
+```
+L_ORPO = L_SFT + λ * L_OR
+  L_SFT: CrossEntropy on chosen response (일반 SFT)
+  L_OR:  -log(σ(log(odds_chosen / odds_rejected)))  (선호도 정렬)
+```
+
+| | DPO | ORPO |
+|---|---|---|
+| Reference model | 필요 | **불필요** |
+| 학습 단계 | SFT → DPO (2단계) | **1단계** |
+| 시작점 | SFT 완료 모델 | **Pretrained 모델** |
+
+#### 왜 네이티브 구현?
+
+기존 `train/orpo.py`는 TRL 기반 → HF AutoModel 필요 → 커스텀 Mamba-2 하이브리드 미지원. DPO와 동일 이유로 **`train/orpo_native.py`를 네이티브 구현**.
+
+#### 학습 설정
+
+| 항목 | 값 |
+|------|-----|
+| 시작점 | `checkpoints/3b_final/checkpoint-0319772` (Pretrained) |
+| 데이터 | 504,103 preference pairs (기존과 동일) |
+| Steps | 10,000 |
+| LR | 5e-6 (DPO의 10배 — pretrained에서 시작하므로) |
+| λ (OR weight) | 1.0 |
+| LoRA | rank=32, alpha=64 |
+| VRAM | 6.2GB |
+| 소요 시간 | 12시간 48분 |
+
+#### 학습 결과
+
+```
+학습 추이:
+  step     10 | sft 10.16 | or 0.909 | total 11.07  (시작)
+  step  1,000 | sft  6.25 | or 0.751 | total  7.00
+  step  3,000 | sft  5.99 | or 0.597 | total  6.59
+  step  5,000 | sft  6.03 | or 0.565 | total  6.60
+  step  7,000 | sft  5.92 | or 0.555 | total  6.47
+  step 10,000 | sft  5.85 | or 0.558 | total  6.41  (최종)
+```
+
+SFT loss -42.4%, OR loss -38.6% 하강.
+
+#### SFT→DPO→SLERP vs ORPO 종합 비교
+
+| 지표 | SLERP (α=0.5) | ORPO (10K) | 승자 |
+|------|:-------------:|:----------:|:----:|
+| **Greedy 반복률** | **74.5%** | 87.1% | SLERP |
+| **greedy+r1.2 반복률** | 5.5% | **3.7%** | ORPO |
+| **t0.7+r1.2 반복률** | **0.6%** | 1.8% | SLERP |
+| **hellaswag** | **39.0%** | 35.0% | SLERP |
+| **arc_easy** | 27.0% | **30.0%** | ORPO |
+| **belebele_kor** | **30.0%** | 23.0% | SLERP |
+| **arc_challenge** | 22.0% | **19.0%** | SLERP |
+| **global_mmlu_ko** | 23.3% | 23.3% | 동률 |
+| **Chat 대화 품질** | ✅ 유창 | ❌ 깨짐 | **SLERP** |
+| **학습 시간** | 5일+8시간 | **12.8시간** | ORPO |
+
+#### 분석 및 결론
+
+**SLERP 승리 (현재 설정에서).**
+
+ORPO가 열세인 핵심 이유: **SFT 학습 부족**. ORPO의 SFT loss가 5.85에서 멈춘 반면, SFT v2의 최종 val_loss는 1.79. 이는 ORPO 10,000 steps가 SFT 65,000 steps에 비해 **절대적으로 부족**하기 때문.
+
+- **Chat 응답이 깨지는 이유**: SFT 학습이 충분하지 않아 instruction following 능력이 미형성
+- **Greedy 반복률이 높은 이유**: 아직 유창한 한국어 생성 패턴이 충분히 학습되지 않음
+- **rep_penalty=1.2에서는 ORPO가 약간 우위** (3.7% vs 5.5%): OR loss가 반복 억제에 일부 기여
+
+**공정한 비교를 위해서는:**
+- ORPO를 **65,000 steps 이상** 학습해야 SFT v2와 동등한 비교 가능 (약 5일 소요)
+- 현재 10,000 steps는 "탐색적 실험"의 성격
+
+**인사이트:**
+1. ORPO의 **시간 효율성**은 매력적 (12.8시간 vs 5일+8시간)
+2. 하지만 동등한 SFT 품질을 달성하려면 결국 비슷한 steps가 필요
+3. **SFT loss가 충분히 수렴한 후에야** OR loss의 정렬 효과가 발휘될 것으로 예상
+4. 현재 SLERP 파이프라인이 이 모델/데이터 조합에서는 **더 안정적인 결과**를 제공
 
 #### 실행 방법
 

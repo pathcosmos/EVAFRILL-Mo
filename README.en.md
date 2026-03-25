@@ -1186,9 +1186,99 @@ ASSISTANT: 건강에 좋은 운동은 여러 가지가 있습니다. 먼저, 심
 2. ~~Multi-α experiment~~ → ✅ α=0.5 confirmed optimal
 3. ~~Qualitative evaluation~~ → ✅ Completed
 4. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
-5. **ORPO retry** — Restart from SFT to learn preferences during training
+5. ~~ORPO retry~~ → ✅ Experiment completed (see below)
 6. **SFT data quality audit** — Investigate hallucination and garbled output root causes
 7. **Scale up** — Move to 7B+ models with larger compute budget
+
+---
+
+### ORPO Experiment: SFT→DPO→SLERP vs ORPO Comparison (2026-03-25)
+
+#### Motivation
+
+DPO failed to directly solve the repetition problem (SFT 79.8% → DPO 80.7%, actually worsened). ORPO learns SFT+alignment **simultaneously**, so we tested whether it can overcome the structural limitations of the separated pipeline.
+
+#### What is ORPO?
+
+ORPO (Odds Ratio Preference Optimization, Hong et al., 2024) combines SFT loss and preference loss in a single objective:
+
+```
+L_ORPO = L_SFT + λ * L_OR
+  L_SFT: CrossEntropy on chosen response (standard SFT)
+  L_OR:  -log(σ(log(odds_chosen / odds_rejected)))  (preference alignment)
+```
+
+| | DPO | ORPO |
+|---|---|---|
+| Reference model | Required | **Not needed** |
+| Training stages | SFT → DPO (2 stages) | **1 stage** |
+| Starting point | SFT model | **Pretrained model** |
+
+#### Why Native Implementation?
+
+Existing `train/orpo.py` uses TRL → requires HF AutoModel → incompatible with custom Mamba-2 hybrid. Same reason as DPO — wrote **`train/orpo_native.py`** natively.
+
+#### Training Configuration
+
+| Item | Value |
+|------|-------|
+| Starting point | `checkpoints/3b_final/checkpoint-0319772` (Pretrained) |
+| Data | 504,103 preference pairs (same as DPO) |
+| Steps | 10,000 |
+| LR | 5e-6 (10× DPO — starting from pretrained) |
+| λ (OR weight) | 1.0 |
+| LoRA | rank=32, alpha=64 |
+| VRAM | 6.2GB |
+| Duration | 12h 48m |
+
+#### Training Results
+
+```
+Training trajectory:
+  step     10 | sft 10.16 | or 0.909 | total 11.07  (start)
+  step  1,000 | sft  6.25 | or 0.751 | total  7.00
+  step  3,000 | sft  5.99 | or 0.597 | total  6.59
+  step  5,000 | sft  6.03 | or 0.565 | total  6.60
+  step  7,000 | sft  5.92 | or 0.555 | total  6.47
+  step 10,000 | sft  5.85 | or 0.558 | total  6.41  (final)
+```
+
+SFT loss -42.4%, OR loss -38.6% decrease.
+
+#### SFT→DPO→SLERP vs ORPO Head-to-Head
+
+| Metric | SLERP (α=0.5) | ORPO (10K) | Winner |
+|--------|:-------------:|:----------:|:------:|
+| **Greedy repetition** | **74.5%** | 87.1% | SLERP |
+| **greedy+r1.2 repetition** | 5.5% | **3.7%** | ORPO |
+| **t0.7+r1.2 repetition** | **0.6%** | 1.8% | SLERP |
+| **hellaswag** | **39.0%** | 35.0% | SLERP |
+| **arc_easy** | 27.0% | **30.0%** | ORPO |
+| **belebele_kor** | **30.0%** | 23.0% | SLERP |
+| **arc_challenge** | 22.0% | **19.0%** | SLERP |
+| **global_mmlu_ko** | 23.3% | 23.3% | Tied |
+| **Chat quality** | ✅ Fluent | ❌ Broken | **SLERP** |
+| **Training time** | 5d+8h | **12.8h** | ORPO |
+
+#### Analysis and Conclusion
+
+**SLERP wins (under current settings).**
+
+Key reason for ORPO's weakness: **insufficient SFT learning**. ORPO's SFT loss stopped at 5.85, while SFT v2's final val_loss was 1.79. This is because 10,000 ORPO steps is **far fewer** than SFT's 65,000 steps.
+
+- **Chat responses are broken** because instruction-following ability hasn't formed yet
+- **Higher greedy repetition** because fluent Korean generation patterns are under-learned
+- **rep_penalty=1.2 slightly favors ORPO** (3.7% vs 5.5%): OR loss contributes to repetition suppression
+
+**For a fair comparison:**
+- ORPO needs **65,000+ steps** to match SFT v2 quality (~5 days)
+- Current 10,000 steps is an "exploratory experiment"
+
+**Insights:**
+1. ORPO's **time efficiency** is attractive (12.8h vs 5d+8h)
+2. But achieving equivalent SFT quality ultimately requires similar step counts
+3. **OR loss alignment effect will only manifest after SFT loss converges sufficiently**
+4. The SLERP pipeline provides **more stable results** for this model/data combination
 
 #### Execution Commands
 
