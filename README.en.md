@@ -1209,15 +1209,56 @@ This model uses a **custom hybrid Mamba-2 + Transformer** architecture, making l
 
 > **Note:** This is a deliberate tradeoff of choosing a custom hybrid architecture — performance and research flexibility over portability. The model can be served via vLLM or the pure Python inference server.
 
+### Repetition-Targeted DPO Experiment (DPO Round 3, 2026-03-25)
+
+#### Motivation
+
+Existing DPO used general preference data (504K) but failed to directly solve repetition (SFT 79.8% → DPO 80.7%). Testing whether **explicit repetitive/non-repetitive pairs** enable DPO to directly target repetition.
+
+#### Self-Generated Preference Data
+
+Generated two decodings for the same prompts using the SLERP model:
+- **rejected**: greedy (temp=0, rep_penalty=1.0) → repetitive (avg 71.7%)
+- **chosen**: sampling (temp=0.7, rep_penalty=1.2) → clean (avg 0.1%)
+
+105 preference pairs from 105 Korean prompts (10 categories: daily life, science, history, career, health, creative writing, tech, culture, environment, etc.) via `data/generate_repetition_preference.py`. Combined with existing 504K for 684,647 total pairs.
+
+#### Training Configuration & Results
+
+| Item | Value |
+|------|-------|
+| Starting point | `checkpoints/3b_dpo/checkpoint-slerp` (SLERP final model) |
+| Data | 684,647 pairs (504K existing + 105 repetition-targeted) |
+| Steps | 1,000 |
+| Beta | 0.05 |
+| LR | 1e-7 |
+| VRAM | 6.3GB |
+| Duration | ~1.5 hours |
+
+```
+Training trajectory:
+  step   10 | loss 0.6932 | margin -0.007
+  step  100 | loss 0.6888 | margin +0.013
+  step  500 | loss 0.6925 | margin +0.014
+  step 1000 | loss 0.6910 | margin +0.014  (final)
+```
+
+Minimal loss change (0.693→0.691). The model was already well-aligned via SLERP, so additional training has small effect. The 105 repetition-targeted samples are diluted within 684K (0.015%).
+
+Checkpoint: `checkpoints/3b_dpo_r3/checkpoint-merged`
+
+#### Analysis
+
+105 repetition-targeted pairs represent only 0.015% of the total 684K dataset — too diluted to meaningfully influence model behavior. Evaluation needed to confirm actual repetition rate changes.
+
+---
+
 ### Future Improvement Directions
 
-1. ~~Repetition penalty decoding~~ → ✅ Confirmed effective
-2. ~~Multi-α experiment~~ → ✅ α=0.5 confirmed optimal
-3. ~~Qualitative evaluation~~ → ✅ Completed
-4. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
-5. ~~ORPO retry~~ → ✅ Experiment completed (see ORPO section above)
-6. **SFT data quality audit** — Investigate hallucination and garbled output root causes
-7. **Scale up** — Move to 7B+ models with larger compute budget
+1. ~~Repetition-targeted preference data~~ → ✅ Experiment completed (see above)
+2. **Scale up repetition data** — Expand from 105 to thousands/tens of thousands of pairs for DPO retraining
+3. **SFT data quality audit** — Investigate hallucination and garbled output root causes
+4. **Scale up** — Move to 7B+ models with larger compute budget
 
 ---
 

@@ -1189,11 +1189,56 @@ python3 demo/app.py  # http://localhost:7860
 
 ---
 
+### 반복 특화 DPO 실험 (DPO Round 3, 2026-03-25)
+
+#### 실험 동기
+
+기존 DPO는 일반 preference 데이터(504K)로 학습했지만, 반복 문제를 직접 해결하지 못했음 (SFT 79.8% → DPO 80.7%). **반복/비반복 쌍을 명시적으로 포함**하면 DPO가 반복을 직접 타겟할 수 있는지 검증.
+
+#### Self-Generated Preference 데이터
+
+SLERP 모델로 동일 프롬프트에 대해 두 가지 디코딩으로 생성:
+- **rejected**: greedy (temp=0, rep_penalty=1.0) → 반복 심함 (평균 71.7%)
+- **chosen**: sampling (temp=0.7, rep_penalty=1.2) → 깨끗함 (평균 0.1%)
+
+`data/generate_repetition_preference.py`로 105개 한국어 프롬프트(10개 카테고리: 일상, 과학, 역사, 직업, 건강, 창작, 기술, 문화, 환경 등)에서 105개 preference pairs 생성. 기존 504K와 합쳐 684,647개로 DPO Round 3 실행.
+
+#### 학습 설정 및 결과
+
+| 항목 | 값 |
+|------|-----|
+| 시작점 | `checkpoints/3b_dpo/checkpoint-slerp` (SLERP 최종 모델) |
+| 데이터 | 684,647 pairs (504K 기존 + 105 반복 특화) |
+| Steps | 1,000 |
+| Beta | 0.05 |
+| LR | 1e-7 |
+| VRAM | 6.3GB |
+| 소요 시간 | ~1.5시간 |
+
+```
+학습 추이:
+  step   10 | loss 0.6932 | margin -0.007
+  step  100 | loss 0.6888 | margin +0.013
+  step  500 | loss 0.6925 | margin +0.014
+  step 1000 | loss 0.6910 | margin +0.014  (최종)
+```
+
+Loss 변화 미미 (0.693→0.691). 이미 SLERP로 잘 정렬된 모델 위에 추가 학습이라 변화폭이 작음. 105개 반복 특화 샘플이 684K 속에 희석됨 (0.015%).
+
+체크포인트: `checkpoints/3b_dpo_r3/checkpoint-merged`
+
+#### 분석
+
+반복 특화 데이터 105개가 전체 684K의 0.015%에 불과하여, 모델 행동에 유의미한 영향을 주기에는 비율이 너무 낮을 수 있음. 평가를 통해 실제 반복률 변화를 확인해야 함.
+
+---
+
 ### 향후 개선 방향
 
-1. **더 큰 규모의 preference 데이터** — 반복 vs 비반복 쌍을 명시적으로 포함
-2. **SFT 데이터 품질 점검** — hallucination 및 비정상 출력 원인 조사
-3. **모델 규모 확대** — 더 큰 compute budget 확보 시 7B+ 규모로 스케일업
+1. ~~반복 특화 preference 데이터~~ → ✅ 실험 완료 (위 참조)
+2. **반복 특화 데이터 비율 증대** — 105개가 아닌 수천~수만 개로 확대하여 DPO 재학습
+3. **SFT 데이터 품질 점검** — hallucination 및 비정상 출력 원인 조사
+4. **모델 규모 확대** — 더 큰 compute budget 확보 시 7B+ 규모로 스케일업
 
 ---
 
