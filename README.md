@@ -42,7 +42,14 @@ NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) 아키텍처에서 영감�
 - [개발 히스토리](#개발-히스토리)
 - [벤치마크 결과](#벤치마크-결과)
 - [SFT (Supervised Fine-Tuning)](#sft-supervised-fine-tuning)
-- [Post-SFT: 평가 → DPO 파이프라인](#post-sft-평가--dpo-파이프라인)
+- [모델 정렬 및 평가 (Model Alignment & Evaluation)](#모델-정렬-및-평가-model-alignment--evaluation)
+  - [SFT 모델 평가 결과](#sft-모델-평가-결과)
+  - [Preference 데이터 준비](#preference-데이터-준비)
+  - [DPO (Direct Preference Optimization)](#dpo-direct-preference-optimization)
+  - [종합 평가 결과](#종합-평가-결과)
+  - [ORPO 비교 실험 (2026-03-25)](#orpo-비교-실험-2026-03-25)
+  - [배포 및 추론](#배포-및-추론)
+  - [향후 개선 방향](#향후-개선-방향)
 - [관련 프로젝트](#관련-프로젝트)
 - [참조 논문](#참조-논문)
 - [감사의 글](#감사의-글)
@@ -823,11 +830,11 @@ val_loss
 
 ---
 
-## Post-SFT: 평가 → DPO 파이프라인
+## 모델 정렬 및 평가 (Model Alignment & Evaluation)
 
-SFT v2 완료(step 65,000) 후, 모델 품질 평가와 DPO(Direct Preference Optimization)를 통한 정렬(alignment) 단계입니다.
+SFT v2 완료(step 65,000) 후의 내러티브: **SFT 모델 품질 평가 → DPO 선호도 학습 → SLERP 병합 → 종합 평가 → ORPO 비교 실험**.
 
-### SFT 모델 평가 (Phase 2: 생성 품질)
+### SFT 모델 평가 결과
 
 `eval/evafrill_eval.py`를 사용한 4-phase 평가 체계 중 Phase 2(생성 품질)를 완료했습니다.
 
@@ -838,32 +845,22 @@ SFT v2 완료(step 65,000) 후, 모델 품질 평가와 DPO(Direct Preference Op
 | Phase 1 (PPL) | Perplexity on 3b_val.bin | ⏭ 스킵 | stride=2048으로도 ~4.4시간 소요, 우선순위 낮음 |
 | Phase 2 (생성) | 15 프롬프트 × 4 디코딩 설정 | ✅ 완료 | ~2.5시간 |
 | Phase 3 (보정) | Calibration curve | ⏭ 스킵 | |
-| Phase 4 (lm-eval) | 6개 벤치마크 (kmmlu 등) | ❌ 중단 | 9시간 후 중단 — 아래 사유 참조 |
+| Phase 4 (lm-eval) | 6개 벤치마크 (kmmlu 등) | ❌ 중단 | kmmlu가 ~167,000 문제 포함, H100 MIG에서 12-18시간 소요로 DPO에 GPU 할당 |
 
-**Phase 4 중단 사유:**
-
-lm-eval Phase 4는 6개 벤치마크(`belebele_kor_Hang`, `global_mmlu_full_ko`, `hellaswag`, `arc_easy`, `arc_challenge`, `kmmlu`)를 실행합니다. 이 중 `kmmlu`가 **269개 서브태스크, ~167,000 문제**를 포함하여 전체 ~195,000+ 예제를 처리해야 합니다. H100 MIG 단일 GPU(batch_size=2)에서 이 규모는 **12-18시간** 소요로 추정되어, 9시간 실행 후 중단하고 DPO 학습에 GPU를 할당하기로 결정했습니다.
-
-**Phase 2 생성 품질 결과 (요약):**
-
-```
-체크포인트: checkpoints/3b_sft_v2/checkpoint-best (step 65,059)
-디코딩 설정: greedy, t0.7, t0.7_r1.2, t0.9_r1.1
-```
+**체크포인트**: `checkpoints/3b_sft_v2/checkpoint-best` (step 65,059)
 
 | 프롬프트 | Greedy 3-gram 반복률 | 평가 |
 |----------|--------------------:|------|
 | 대한민국의 수도는 | 96.85% | 동일 문구 반복 루프 |
 | 양자 컴퓨터란 | 96.85% | 심각한 반복 |
-| 건강한 식습관을 위해서는 | 59.45% | 상대적으로 양호, 영양 관련 내용 생성 |
+| 건강한 식습관을 위해서는 | 59.45% | 상대적으로 양호 |
 | 인공지능이란 | 50.00% | 구조화된 목록 형식이나 반복 존재 |
 | 한국어는 세계에서 | 35.83% | 낮은 반복이나 한영 혼합 깨짐 |
 | **평균** | **~76%** | **DPO로 반복 문제 해결 필요** |
 
-**핵심 발견:**
-- SFT 모델은 한국어 텍스트를 생성하나, **greedy 디코딩에서 심각한 반복 루프** 발생
-- Repetition penalty (1.2)를 적용하면 개선되나 근본적 해결 아님
-- **DPO를 통한 선호도 학습이 반복 억제에 필수적**
+**핵심 발견**: SFT 모델은 한국어 텍스트를 생성하나, greedy 디코딩에서 심각한 반복 루프 발생. DPO를 통한 선호도 학습이 반복 억제에 필수적.
+
+---
 
 ### Preference 데이터 준비
 
@@ -880,11 +877,11 @@ lm-eval Phase 4는 6개 벤치마크(`belebele_kor_Hang`, `global_mmlu_full_ko`,
 | jojo0217/korean_rlhf_dataset | 0 | SFT 전용 (preference pair 없음) |
 | **합계** | **684,542 → 504,103** | 토크나이징 후 유효 샘플 수 |
 
+---
+
 ### DPO (Direct Preference Optimization)
 
-#### DPO vs ORPO: 정렬 기법 선택 근거
-
-DPO와 ORPO는 모두 "chosen vs rejected" 선호도 쌍으로 모델을 정렬하는 기법이지만, 구현 방식과 적용 시점이 다릅니다.
+#### DPO vs ORPO: 기법 비교 및 선택 근거
 
 | | DPO | ORPO |
 |---|---|---|
@@ -896,23 +893,24 @@ DPO와 ORPO는 모두 "chosen vs rejected" 선호도 쌍으로 모델을 정렬�
 
 **이 프로젝트에서 DPO를 선택한 이유:**
 
-1. **SFT가 이미 완료됨** — ORPO의 최대 장점은 SFT+정렬을 동시에 수행하는 것인데, SFT v2가 step 65,000에서 이미 수렴 완료된 상태. ORPO를 쓰려면 SFT를 처음부터 다시 돌려야 하므로 5일간의 학습이 낭비됨
-2. **LoRA B-zeroing으로 VRAM 단점 해소** — DPO의 "ref model이 필요하여 VRAM이 높다"는 단점을 LoRA B를 임시 0으로 만들어 ref logprob을 계산하는 방식으로 해결. 모델 복제 없이 실측 6.3GB로 동작
-3. **Nemotron-H 논문이 DPO 사용** — 이 프로젝트의 아키텍처 레퍼런스인 Nemotron-H가 2-round DPO + SLERP merge 파이프라인을 사용하므로, 동일 전략을 따름
+1. **SFT가 이미 완료됨** — SFT v2가 step 65,000에서 수렴 완료. ORPO를 쓰려면 SFT를 처음부터 재실행해야 하므로 5일간의 학습이 낭비됨
+2. **LoRA B-zeroing으로 VRAM 단점 해소** — lora_B를 임시 0으로 만들어 ref logprob 계산, 모델 복제 없이 실측 6.3GB 동작
+3. **Nemotron-H 논문이 DPO 사용** — 2-round DPO + SLERP merge 파이프라인을 표준으로 채택
 
-> **참고:** 만약 처음부터 다시 설계한다면, ORPO로 SFT+정렬을 한번에 하는 것이 더 효율적일 수 있음. 프로젝트에 `train/orpo.py`가 이미 존재하며, 향후 실험 시 활용 가능.
+> **참고:** `train/orpo.py`가 프로젝트에 존재하며, 향후 처음부터 재설계 시 ORPO로 SFT+정렬을 한번에 수행하는 것이 더 효율적일 수 있음.
 
-#### 설계 결정
+#### 학습 설정
+
+**설계 결정:**
 
 | 결정 | 선택 | 근거 |
 |------|------|------|
-| **정렬 기법** | DPO (ORPO 대신) | SFT 완료 상태에서 ORPO는 이점 없음; Nemotron-H 레퍼런스 |
 | **프레임워크** | Native DPO (TRL 미사용) | TRL은 HF AutoModel 필요 — Hybrid Mamba 미지원 |
 | **파라미터 효율화** | LoRA (rank=32, alpha=64) | ~22GB VRAM → H100 MIG 42GB에 여유 있게 적합 |
 | **Reference 모델** | LoRA B-zeroing | lora_B를 임시 0으로 만들어 ref logprob 계산, 모델 복제 불필요 |
-| **체크포인트 병합** | SLERP interpolation | Nemotron-H 스타일: `slerp(W_sft, W_dpo, α=0.5)`로 alignment tax 완화 |
+| **체크포인트 병합** | SLERP interpolation | `slerp(W_sft, W_dpo, α=0.5)`로 alignment tax 완화 |
 
-#### LoRA 어댑터 구성
+**LoRA 어댑터:**
 
 ```
 적용 레이어:    Attention (qkv_proj, out_proj) + Mamba-2 (in_proj, out_proj)
@@ -921,114 +919,81 @@ DPO와 ORPO는 모두 "chosen vs rejected" 선호도 쌍으로 모델을 정렬�
 VRAM 사용:     ~6.3GB (MIG 42GB의 15%)
 ```
 
-#### 2-Round DPO 전략 (Nemotron-H 스타일)
+**2-Round 전략 (Nemotron-H 스타일):**
 
-DPO를 2단계로 나누는 이유:
-
-- **Round 1 (Exploration)**: 전체 504K preference 데이터로 광범위한 선호도 신호를 학습합니다. 높은 β(0.1)와 lr(5e-7)로 빠르게 선호도 방향을 탐색합니다.
-- **Round 2 (Exploitation)**: Round 1의 병합 체크포인트 위에, 낮은 β(0.05)와 lr(1e-7)로 정밀 조정합니다. β를 낮추면 reference model에서 덜 벗어나므로 **과도한 정렬(over-alignment)을 방지**합니다. 즉, 선호도를 더 학습하면서도 SFT에서 얻은 유창성과 지식을 보존합니다.
-
-| | Round 1 | Round 2 |
+| | Round 1 (Exploration) | Round 2 (Exploitation) |
 |---|---------|---------|
-| **목적** | 광범위 선호도 학습 (exploration) | 정밀 조정 (exploitation) |
-| **데이터** | 전체 preference (504K 샘플) | 동일 또는 고품질 서브셋 |
+| **목적** | 광범위 선호도 학습 | 정밀 조정, over-alignment 방지 |
+| **데이터** | 전체 preference (504K 샘플) | 동일 |
 | **Steps** | 3,000 | 2,000 |
-| **Beta** | 0.1 | 0.05 (over-alignment 방지) |
-| **LR** | 5e-7 | 1e-7 (10배 낮음) |
+| **Beta** | 0.1 | 0.05 |
+| **LR** | 5e-7 | 1e-7 |
 | **Warmup** | 100 steps | 50 steps |
 | **Batch** | bs=1 × grad_accum=16 = eff 16 | 동일 |
 
-#### DPO Round 1 결과 (2026-03-23, 완료)
+#### 학습 결과
+
+**Round 1** (2026-03-23, 4시간 33분):
 
 ```
-시작:        2026-03-23 10:49 UTC
-완료:        2026-03-23 15:22 UTC (4시간 33분)
-속도:        ~5.5초/step
-VRAM:        6.3GB / 42GB (전 구간 안정)
-
-학습 추이:
-  step   10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
-  step  100 | loss 0.6855 | margin  0.006 | lr 5.0e-07  (warmup 완료)
-  step  500 | loss 0.6543 | margin  0.120 | lr 4.93e-07
-  step 1500 | loss 0.6012 | margin  0.210 | lr 2.50e-07  (중반)
-  step 2500 | loss 0.5717 | margin  0.280 | lr 7.50e-08  (후반)
-  step 3000 | loss 0.5652 | margin  0.245 | lr 5.0e-08   (최종)
-
-체크포인트: checkpoints/3b_dpo_r1/checkpoint-0003000
-LoRA 병합:  checkpoints/3b_dpo_r1/checkpoint-merged
+step   10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
+step  500 | loss 0.6543 | margin  0.120 | lr 4.93e-07
+step 1500 | loss 0.6012 | margin  0.210 | lr 2.50e-07
+step 3000 | loss 0.5652 | margin  0.245 | lr 5.0e-08   (최종)
 ```
 
-**해석:**
-- **Loss 0.693 → 0.565** (18.5% 하락): random baseline에서 확실히 벗어남 — 모델이 chosen/rejected 구분을 학습함
-- **Margin +0.245**: chosen의 log-probability가 rejected보다 평균 0.245 높음 — 긍정적 선호도 신호
-- 학습 전 구간에서 gnorm < 5, NaN 없음, VRAM 일정 — 안정적 학습
+Loss 0.693 → 0.565 (18.5% 하락), Margin +0.245: chosen/rejected 구분 학습 완료. 체크포인트: `checkpoints/3b_dpo_r1/checkpoint-merged`
 
-#### SLERP 체크포인트 병합 — Alignment Tax 완화
+**Round 2** (2026-03-23, 3시간 2분):
 
-**Alignment tax란?** DPO가 선호도를 학습하는 과정에서, SFT 단계에서 획득한 지식과 유창성을 일부 잃는 현상입니다. 예를 들어, DPO 후 모델이 반복은 줄었지만 사실 정확도가 떨어지는 경우가 이에 해당합니다.
+```
+step   50 | loss 0.6953 | margin  0.003 | lr 1.0e-07  (warmup 완료)
+step 1000 | loss 0.6906 | margin  0.008 | lr 5.7e-08
+step 2000 | loss 0.6886 | margin -0.005 | lr 1.0e-08  (최종)
+```
 
-**SLERP (Spherical Linear Interpolation)**: 두 체크포인트(SFT, DPO)를 가중치 공간에서 **구면 보간**하여 병합합니다. 일반적인 선형 보간(LERP)과 달리, SLERP는 가중치 벡터의 **방향(direction)을 보존**하면서 보간하므로, 각 체크포인트가 학습한 특성을 더 잘 유지합니다.
+Loss 0.692 → 0.689 (0.5% 변화): 의도적으로 완만한 하강 — 보수적 미세 조정이 설계대로 작동. gnorm 1.6~2.2로 Round 1(3~4)보다 안정적. 체크포인트: `checkpoints/3b_dpo_r2/checkpoint-merged`
+
+#### SLERP 병합 및 최종 모델 선택
+
+**SLERP(Spherical Linear Interpolation)란?** DPO가 선호도를 학습하는 과정에서 SFT 지식을 일부 잃는 alignment tax를 완화하기 위해, 두 체크포인트를 가중치 공간에서 구면 보간합니다. 일반 LERP와 달리 가중치 벡터의 방향을 보존하므로 각 체크포인트의 특성을 더 잘 유지합니다.
 
 ```
 SLERP(W_sft, W_dpo, α=0.5):
-  - α=0: 순수 SFT (정렬 없음, 반복 문제 그대로)
-  - α=0.5: SFT 지식 50% + DPO 정렬 50% (Nemotron-H 기본값)
-  - α=1: 순수 DPO (최대 정렬, alignment tax 최대)
+  α=0: 순수 SFT  |  α=0.5: SFT 50% + DPO 50% (Nemotron-H 기본값)  |  α=1: 순수 DPO
 ```
 
-α=0.5는 Nemotron-H 논문의 기본값으로, SFT의 지식/유창성과 DPO의 선호도 정렬 사이에서 균형을 잡는 지점입니다.
+**3-체크포인트 비교 (2026-03-24, 15개 프롬프트 greedy 반복률):**
 
-#### DPO Round 2 결과 (2026-03-23, 완료)
+| 모델 | 평균 반복률 | 최저 반복 프롬프트 수 |
+|------|:---------:|:------------------:|
+| SFT v2 | 79.8% | 1/15 |
+| DPO Round 2 | 80.7% | 1/15 |
+| **SLERP (α=0.5)** | **74.5%** | **7/15** |
 
-```
-시작:        2026-03-23 16:10 UTC
-완료:        2026-03-23 19:12 UTC (3시간 2분)
-속도:        ~5.5초/step
-VRAM:        6.3GB / 42GB (전 구간 안정)
+**최종 선택: SLERP (α=0.5)** — `checkpoints/3b_dpo/checkpoint-slerp`
 
-학습 추이:
-  step   50 | loss 0.6953 | margin  0.003 | lr 1.0e-07  (warmup 완료)
-  step  500 | loss 0.6880 | margin  0.027 | lr 8.9e-08
-  step 1000 | loss 0.6906 | margin  0.008 | lr 5.7e-08
-  step 1500 | loss 0.6884 | margin  0.017 | lr 2.5e-08
-  step 2000 | loss 0.6886 | margin -0.005 | lr 1.0e-08  (최종)
+SLERP가 15개 프롬프트 중 7개에서 최저 반복률 달성. "한국의 전통 음식" 90.9% → 39.4% (-51.5pp) 등 큰 개선 사례 존재.
 
-체크포인트: checkpoints/3b_dpo_r2/checkpoint-0002000
-LoRA 병합:  checkpoints/3b_dpo_r2/checkpoint-merged
-```
+**lm-eval 3-way 비교 (limit=100, 0-shot):**
 
-**해석:**
-- **Loss 0.692 → 0.689** (0.5% 변화): 의도적으로 완만한 하강 — 낮은 β(0.05)와 lr(1e-7)로 과도한 정렬 방지
-- **gnorm 1.6~2.2**: Round 1(3~4)보다 훨씬 안정적 — 보수적 미세 조정이 설계대로 작동
-- Round 1이 선호도 방향을 대폭 학습했다면, Round 2는 그 방향을 미세하게 다듬는 역할
+| Benchmark | SFT | DPO R2 | SLERP |
+|-----------|----:|-------:|------:|
+| hellaswag | 39.0% | 39.0% | 39.0% |
+| belebele_kor_Hang | 30.0% | 29.0% | 30.0% |
+| arc_easy | 28.0% | 28.0% | 27.0% |
+| arc_challenge | 21.0% | 22.0% | 22.0% |
+| global_mmlu_full_ko | 23.4% | 23.4% | 23.3% |
 
-#### DPO 후 다음 단계: 후보군과 선택 근거
+3개 체크포인트 간 accuracy 차이가 1% 이내 — LoRA 기반 DPO + SLERP가 지식을 거의 완벽하게 보존함 (alignment tax 미미).
 
-DPO Round 2 완료 후, 다음으로 가능한 선택지 5가지를 검토했습니다:
+---
 
-| # | 후보 | 설명 | 판정 |
-|---|------|------|------|
-| 1 | **SLERP 병합** | SFT + DPO를 α=0.5로 구면 보간 | ⭐ 채택 |
-| 2 | DPO 직접 사용 | Round 2 merged 체크포인트를 최종 모델로 | 비교 대상 |
-| 3 | 평가 먼저 | SLERP 전에 DPO 체크포인트 품질 측정 | ⭐ 채택 (병행) |
-| 4 | DPO Round 3 | 추가 학습 라운드 | ❌ 보류 |
-| 5 | 다중 α 실험 | α=0.3, 0.5, 0.7로 SLERP 비교 | ❌ 보류 |
+### 종합 평가 결과
 
-**최종 접근: "평가 먼저 + SLERP → 3-way 비교"**
+#### 생성 품질 비교 (Greedy 반복률)
 
-SLERP를 바로 실행하지 않고, SFT / DPO / SLERP 3개 체크포인트를 모두 동일 조건으로 평가하여 데이터 기반으로 최종 모델을 선택하기로 했습니다.
-
-**이 접근의 이유:**
-1. **SLERP는 비용이 거의 없음** — GPU 학습이 아닌 CPU 가중치 보간 (약 1분 소요), 해봐서 손해 볼 것이 없음
-2. **Nemotron-H 레퍼런스** — 논문이 2-round DPO + SLERP merge를 표준 파이프라인으로 제시
-3. **Alignment tax 보험** — DPO가 SFT 지식을 잃었을 가능성에 대한 안전장치
-4. **데이터 기반 판단** — 3개를 비교해야 SLERP가 실제로 도움이 되는지 알 수 있음
-
-#### 3-체크포인트 비교 평가 결과 (2026-03-24)
-
-SFT, DPO Round 2, SLERP(α=0.5) 세 체크포인트를 동일 15개 프롬프트 × greedy 디코딩으로 평가한 결과:
-
-**프롬프트별 Greedy 3-gram 반복률 (%):**
+15개 프롬프트별 Greedy 3-gram 반복률 전체 비교:
 
 | 프롬프트 | SFT | DPO R2 | SLERP | 최저 |
 |----------|----:|-------:|------:|------|
@@ -1049,64 +1014,14 @@ SFT, DPO Round 2, SLERP(α=0.5) 세 체크포인트를 동일 15개 프롬프트
 | 세계 2차 대전 이후 | 79.5 | 77.6 | 77.6 | DPO=SLERP |
 | **평균** | **79.8%** | **80.7%** | **74.5%** | **SLERP** |
 
-**요약:**
-
-| 모델 | 평균 반복률 | 최저 반복 프롬프트 수 |
-|------|-----------|---------------------|
-| SFT v2 | 79.8% | 1/15 |
-| DPO Round 2 | 80.7% | 1/15 |
-| **SLERP (α=0.5)** | **74.5%** | **7/15** |
-
-#### 최종 모델 선택 및 분석
-
-**선택: SLERP (α=0.5)** — `checkpoints/3b_dpo/checkpoint-slerp`
-
-**근거:**
-- 15개 프롬프트 중 **7개에서 최저 반복률** 달성 (SFT 1개, DPO 1개)
-- 평균 반복률 **74.5%**로 SFT(79.8%)와 DPO(80.7%) 대비 최저
-- 일부 프롬프트에서 큰 개선: "한국의 전통 음식" 90.9% → 39.4% (-51.5pp)
-
 **한계 — 솔직한 평가:**
-- 목표였던 **30% 이하**에는 크게 못 미침 (평균 74.5%)
-- 2개 프롬프트에서 SFT보다 악화: "대한민국의 수도는" (+11.8pp), "한국 문학" (+11.4pp)
-- DPO 단독 체크포인트는 SFT보다 오히려 **미세하게 악화** (80.7% vs 79.8%) — DPO가 반복 문제를 직접 해결하지 못함
-- **근본 원인**: 3B 규모 하이브리드 Mamba 모델의 greedy 디코딩 반복은 모델 아키텍처 수준의 문제일 가능성 — DPO/SLERP만으로는 한계
+- 목표였던 30% 이하에는 크게 못 미침 (평균 74.5%)
+- DPO 단독은 SFT보다 오히려 미세하게 악화 (80.7% vs 79.8%) — DPO가 반복 문제를 직접 해결하지 못함
+- 근본 원인: 3B 규모 하이브리드 Mamba 모델의 greedy 반복은 모델 아키텍처 수준의 문제일 가능성
 
-**lm-eval 벤치마크 결과 (limit=100, kmmlu 제외, 0-shot):**
+#### Repetition Penalty 디코딩 테스트
 
-| Benchmark | SFT | DPO R2 | SLERP | 비고 |
-|-----------|----:|-------:|------:|------|
-| hellaswag | 39.0% | 39.0% | 39.0% | 동일 |
-| belebele_kor_Hang | 30.0% | 29.0% | 30.0% | SFT=SLERP |
-| arc_easy | 28.0% | 28.0% | 27.0% | |
-| arc_challenge | 21.0% | 22.0% | 22.0% | |
-| global_mmlu_full_ko | 23.4% | 23.4% | 23.3% | 거의 동일 |
-
-**핵심 발견**: 3개 체크포인트 간 **accuracy 차이가 1% 이내**. DPO와 SLERP가 SFT의 지식을 거의 완벽하게 보존했음을 의미 — **alignment tax가 미미**합니다. 이는 LoRA 기반 DPO + SLERP 병합 전략이 지식 보존 측면에서 효과적이었음을 보여줍니다.
-
-**SLERP 최종 모델 벤치마크 (limit=500, kmmlu 제외, 0-shot):**
-
-| Benchmark | Accuracy | Random | 비고 |
-|-----------|:--------:|:------:|------|
-| hellaswag | **34.6%** | 25.0% | 영어 상식 추론 +9.6pp |
-| arc_easy | **32.0%** | 25.0% | 기초 과학 +7.0pp |
-| global_mmlu_full_ko | 23.7% | 25.0% | 한국어 전문지식은 미흡 |
-| belebele_kor_Hang | 23.6% | 25.0% | 한국어 독해 제한적 |
-| arc_challenge | 18.2% | 25.0% | 고난이도 추론 부족 |
-
-3B 규모 모델의 한계로 hellaswag/arc_easy에서만 random 대비 유의미한 개선. 한국어 벤치마크는 random 수준 — 모델 규모와 학습 데이터 양의 근본적 제약.
-
-**종합 판단 (Phase 2 반복률 + Phase 4 accuracy):**
-
-| 모델 | 반복률 (↓좋음) | accuracy (↑좋음) | 종합 |
-|------|:-------------:|:---------------:|------|
-| SFT | 79.8% | 28.3% | 기준선 |
-| DPO R2 | 80.7% | 28.3% | 반복 악화, 지식 보존 |
-| **SLERP** | **74.5%** | **28.3%** | **반복 최저, 지식 동일** → 최종 선택 |
-
-#### Repetition Penalty 디코딩 테스트 (2026-03-24)
-
-SLERP 모델에 추론 시 `repetition_penalty=1.2`를 적용한 결과, **반복률이 극적으로 감소**했습니다:
+SLERP 모델에 `repetition_penalty=1.2`를 적용하면 반복률이 극적으로 감소합니다:
 
 | 프롬프트 | greedy (r=1.0) | greedy (r=1.2) | t0.7 + r1.2 |
 |----------|:--------------:|:--------------:|:-----------:|
@@ -1121,24 +1036,44 @@ SLERP 모델에 추론 시 `repetition_penalty=1.2`를 적용한 결과, **반�
 
 ```
 [대한민국의 수도는] → 서울특별시이고, 그 외 지역은 광역시로 분류한다.
-  대한민국의 행정구역 변천사 1945년 8월 15일 - 경기도 인천부(仁川府)
-  1949년 7월 14일 - 경기도 인천시(仁川市)...
+  대한민국의 행정구역 변천사 1945년 8월 15일 - 경기도 인천부(仁川府)...
 
 [한국의 전통 음식 중에서] → 가장 유명한 것이 바로 김치이다. 김치는
-  한국인의 주식이자, 세계인에게 사랑받는 국민음식으로 자리 잡았다.
-  김치가 세계적으로 유명해진 이유는 무엇일까? 그 비밀은 바로 '배추'에 있다...
+  한국인의 주식이자, 세계인에게 사랑받는 국민음식으로 자리 잡았다...
 
 [건강한 식습관을 위해서는] → 균형 잡힌 식단이 중요하다. 특히, 단백질은
   필수 아미노산으로 구성돼 있어 체내 흡수율이 높아 건강에 좋다...
 ```
 
-**결론**: DPO/SLERP 자체는 반복률을 74.5%까지만 개선했으나, **추론 시 rep_penalty=1.2를 적용하면 ~5%대로 급감**합니다. 모델이 학습한 지식과 유창성은 유지하면서 반복만 효과적으로 억제됩니다. "한국어는 세계에서" 프롬프트는 여전히 비정상 출력 — 이는 SFT 학습 데이터의 품질 문제로 추정됩니다.
+**권장 추론 설정**: `temperature=0.7, repetition_penalty=1.2`
 
-**권장 추론 설정**: `temperature=0.7, repetition_penalty=1.2` (t0.7_r1.2)
+#### lm-eval 벤치마크
 
-#### 다중 α SLERP 실험 (2026-03-24)
+**limit=100 3-way 비교** (0-shot, kmmlu 제외):
 
-α=0.3, 0.5, 0.7로 SLERP 병합 후, 동일 5개 프롬프트 + greedy + rep_penalty=1.2로 비교:
+| Benchmark | SFT | DPO R2 | SLERP |
+|-----------|----:|-------:|------:|
+| hellaswag | 39.0% | 39.0% | 39.0% |
+| belebele_kor_Hang | 30.0% | 29.0% | 30.0% |
+| arc_easy | 28.0% | 28.0% | 27.0% |
+| arc_challenge | 21.0% | 22.0% | 22.0% |
+| global_mmlu_full_ko | 23.4% | 23.4% | 23.3% |
+
+**limit=500 최종 SLERP 모델** (0-shot, kmmlu 제외):
+
+| Benchmark | Accuracy | Random | 비고 |
+|-----------|:--------:|:------:|------|
+| hellaswag | **34.6%** | 25.0% | 영어 상식 추론 +9.6pp |
+| arc_easy | **32.0%** | 25.0% | 기초 과학 +7.0pp |
+| global_mmlu_full_ko | 23.7% | 25.0% | 한국어 전문지식 미흡 |
+| belebele_kor_Hang | 23.6% | 25.0% | 한국어 독해 제한적 |
+| arc_challenge | 18.2% | 25.0% | 고난이도 추론 부족 |
+
+hellaswag/arc_easy에서만 random 대비 유의미한 개선. 한국어 벤치마크는 random 수준 — 3B 모델 규모와 학습 데이터 양의 근본적 제약.
+
+#### 다중 α SLERP 실험
+
+α=0.3, 0.5, 0.7로 SLERP 병합 후, 5개 프롬프트 + greedy + rep_penalty=1.2로 비교:
 
 | α | SFT 비중 | DPO 비중 | 평균 반복률 |
 |---|---------|---------|-----------|
@@ -1146,87 +1081,51 @@ SLERP 모델에 추론 시 `repetition_penalty=1.2`를 적용한 결과, **반�
 | **0.5** | **50%** | **50%** | **5.8%** (최저) |
 | 0.7 | 30% | 70% | 7.3% |
 
-**결론**: α=0.5(Nemotron-H 기본값)가 최적. SFT와 DPO를 50:50으로 균형 잡는 것이 반복 억제에 가장 효과적.
+α=0.5(Nemotron-H 기본값)가 최적.
 
-#### 정성적 평가 — Chat Template 대화 테스트 (2026-03-24)
+#### 정성적 Chat Template 평가
 
-SLERP(α=0.5) 모델에 SFT 학습 형식인 chat template(`<|user|>\n...\n<|assistant|>\n`)을 적용하여 실제 대화형 프롬프트 테스트. 디코딩: `temperature=0.7, repetition_penalty=1.2`.
+SLERP(α=0.5) 모델, chat template(`<|user|>\n...\n<|assistant|>\n`), `temperature=0.7, repetition_penalty=1.2`:
 
 ```
 USER: 김치를 만드는 방법을 간단히 알려주세요.
 ASSISTANT: 김치는 한국 요리에서 중요한 역할을 하는 음식으로, 녹색 채소가
-  주재료인 발효 식품이랍니다! 이 음식은 발효 과정을 통해 배추와 무에
-  영양분을 공급하여 건강과 맛의 조화를 추구하는데요...
+  주재료인 발효 식품이랍니다!...
 
 USER: 인공지능이 무엇인지 쉽게 설명해주세요.
 ASSISTANT: 인공지능(artificial intelligence, AI)은 기계가 스스로 학습하고,
-  의사 결정 능력을 가지고 있는 컴퓨터의 한 종류로, 인간의 지능을 모방하는
-  것을 목표로 합니다...
-
-USER: 건강을 위해 어떤 운동을 하면 좋을까요?
-ASSISTANT: 건강에 좋은 운동은 여러 가지가 있습니다. 먼저, 심폐 지구력과
-  근력 향상을 돕는 실내 자전거 타기와 수영이 추천됩니다. 또한, 필라테스와
-  요가도 훌륭한 운동이 될 것입니다...
+  의사 결정 능력을 가지고 있는 컴퓨터의 한 종류로...
 ```
-
-**평가:**
 
 | 항목 | 평가 | 비고 |
 |------|------|------|
 | **반복** | ✅ 양호 | rep_penalty=1.2로 반복 거의 없음 |
 | **유창성** | ✅ 양호 | 자연스러운 한국어 문장 생성 |
-| **Instruction following** | ⚠️ 보통 | 질문에 답하려는 시도는 하나, 정확도가 낮음 |
+| **Instruction following** | ⚠️ 보통 | 질문에 답하려는 시도는 하나, 정확도 낮음 |
 | **사실 정확도** | ❌ 낮음 | "세종 재위 100년 초과" 등 hallucination 발생 |
 | **코드 생성** | ❌ 실패 | 피보나치 코드 요청에 의미 없는 응답 |
 
-**종합**: 3B 규모 모델의 한계로, **유창한 한국어 생성**은 가능하나 **사실 정확도와 복잡한 추론**(코드 생성 등)은 부족. 이는 모델 규모(3B)와 학습 데이터 양(55B tokens)의 근본적 제약.
-
-**향후 개선 방향:**
-1. ~~Repetition penalty 디코딩~~ → ✅ 효과 확인 완료
-2. ~~다중 α 실험~~ → ✅ α=0.5 최적 확인
-3. ~~정성적 평가~~ → ✅ 완료
-4. **더 큰 규모의 preference 데이터** — 반복 vs 비반복 쌍을 명시적으로 포함
-5. ~~ORPO 재시도~~ → ✅ 실험 완료 (아래 참조)
-6. **SFT 데이터 품질 점검** — hallucination 및 비정상 출력 원인 조사
-7. **모델 규모 확대** — 더 큰 compute budget 확보 시 7B+ 규모로 스케일업
+유창한 한국어 생성은 가능하나 사실 정확도와 복잡한 추론은 3B 규모의 근본적 제약.
 
 ---
 
-### ORPO 실험: SFT→DPO→SLERP vs ORPO 비교 (2026-03-25)
+### ORPO 비교 실험 (2026-03-25)
 
-#### 실험 동기
+#### 동기 및 설정
 
-DPO가 반복 문제를 직접 해결하지 못했음 (SFT 79.8% → DPO 80.7%, 오히려 악화). ORPO는 SFT+정렬을 **동시에 학습**하므로, 분리된 파이프라인의 구조적 한계를 극복할 수 있는지 검증하기 위해 실험.
+DPO가 반복 문제를 직접 해결하지 못했음 (SFT 79.8% → DPO 80.7%, 오히려 악화). ORPO는 SFT+정렬을 동시에 학습하므로, 분리 파이프라인의 구조적 한계를 극복할 수 있는지 검증.
 
-#### ORPO란?
+ORPO(Hong et al., 2024): `L_ORPO = L_SFT + λ * L_OR` — reference model 없이 SFT loss와 odds ratio penalty를 단일 목적함수로 결합.
 
-ORPO (Odds Ratio Preference Optimization, Hong et al., 2024)는 SFT loss와 선호도 loss를 하나의 목적함수로 결합:
-
-```
-L_ORPO = L_SFT + λ * L_OR
-  L_SFT: CrossEntropy on chosen response (일반 SFT)
-  L_OR:  -log(σ(log(odds_chosen / odds_rejected)))  (선호도 정렬)
-```
-
-| | DPO | ORPO |
-|---|---|---|
-| Reference model | 필요 | **불필요** |
-| 학습 단계 | SFT → DPO (2단계) | **1단계** |
-| 시작점 | SFT 완료 모델 | **Pretrained 모델** |
-
-#### 왜 네이티브 구현?
-
-기존 `train/orpo.py`는 TRL 기반 → HF AutoModel 필요 → 커스텀 Mamba-2 하이브리드 미지원. DPO와 동일 이유로 **`train/orpo_native.py`를 네이티브 구현**.
-
-#### 학습 설정
+기존 `train/orpo.py`는 TRL 기반(HF AutoModel 필요)이므로, DPO와 동일한 이유로 `train/orpo_native.py`를 네이티브 구현.
 
 | 항목 | 값 |
 |------|-----|
 | 시작점 | `checkpoints/3b_final/checkpoint-0319772` (Pretrained) |
-| 데이터 | 504,103 preference pairs (기존과 동일) |
+| 데이터 | 504,103 preference pairs |
 | Steps | 10,000 |
-| LR | 5e-6 (DPO의 10배 — pretrained에서 시작하므로) |
-| λ (OR weight) | 1.0 |
+| LR | 5e-6 |
+| λ | 1.0 |
 | LoRA | rank=32, alpha=64 |
 | VRAM | 6.2GB |
 | 소요 시간 | 12시간 48분 |
@@ -1234,18 +1133,15 @@ L_ORPO = L_SFT + λ * L_OR
 #### 학습 결과
 
 ```
-학습 추이:
-  step     10 | sft 10.16 | or 0.909 | total 11.07  (시작)
-  step  1,000 | sft  6.25 | or 0.751 | total  7.00
-  step  3,000 | sft  5.99 | or 0.597 | total  6.59
-  step  5,000 | sft  6.03 | or 0.565 | total  6.60
-  step  7,000 | sft  5.92 | or 0.555 | total  6.47
-  step 10,000 | sft  5.85 | or 0.558 | total  6.41  (최종)
+step     10 | sft 10.16 | or 0.909 | total 11.07
+step  1,000 | sft  6.25 | or 0.751 | total  7.00
+step  5,000 | sft  6.03 | or 0.565 | total  6.60
+step 10,000 | sft  5.85 | or 0.558 | total  6.41
 ```
 
 SFT loss -42.4%, OR loss -38.6% 하강.
 
-#### SFT→DPO→SLERP vs ORPO 종합 비교
+#### 종합 비교 및 결론
 
 | 지표 | SLERP (α=0.5) | ORPO (10K) | 승자 |
 |------|:-------------:|:----------:|:----:|
@@ -1260,33 +1156,55 @@ SFT loss -42.4%, OR loss -38.6% 하강.
 | **Chat 대화 품질** | ✅ 유창 | ❌ 깨짐 | **SLERP** |
 | **학습 시간** | 5일+8시간 | **12.8시간** | ORPO |
 
-#### 분석 및 결론
+**결론: SLERP 승리 (현재 설정에서).**
 
-**SLERP 승리 (현재 설정에서).**
+ORPO 열세의 핵심 이유: SFT 학습 부족. ORPO의 SFT loss가 5.85에서 멈춘 반면, SFT v2 val_loss는 1.79 — ORPO 10,000 steps는 SFT 65,000 steps에 비해 절대적으로 부족. 공정한 비교를 위해서는 ORPO를 65,000 steps 이상 학습해야 하며(약 5일), 현재 실험은 탐색적 성격.
 
-ORPO가 열세인 핵심 이유: **SFT 학습 부족**. ORPO의 SFT loss가 5.85에서 멈춘 반면, SFT v2의 최종 val_loss는 1.79. 이는 ORPO 10,000 steps가 SFT 65,000 steps에 비해 **절대적으로 부족**하기 때문.
+- ORPO의 **시간 효율성**은 매력적이나, 동등한 SFT 품질을 달성하려면 결국 비슷한 steps가 필요
+- **SFT loss가 충분히 수렴한 후에야** OR loss의 정렬 효과가 발휘될 것으로 예상
+- 현재 SLERP 파이프라인이 이 모델/데이터 조합에서는 더 안정적인 결과를 제공
 
-- **Chat 응답이 깨지는 이유**: SFT 학습이 충분하지 않아 instruction following 능력이 미형성
-- **Greedy 반복률이 높은 이유**: 아직 유창한 한국어 생성 패턴이 충분히 학습되지 않음
-- **rep_penalty=1.2에서는 ORPO가 약간 우위** (3.7% vs 5.5%): OR loss가 반복 억제에 일부 기여
+---
 
-**공정한 비교를 위해서는:**
-- ORPO를 **65,000 steps 이상** 학습해야 SFT v2와 동등한 비교 가능 (약 5일 소요)
-- 현재 10,000 steps는 "탐색적 실험"의 성격
+### 배포 및 추론
 
-**인사이트:**
-1. ORPO의 **시간 효율성**은 매력적 (12.8시간 vs 5일+8시간)
-2. 하지만 동등한 SFT 품질을 달성하려면 결국 비슷한 steps가 필요
-3. **SFT loss가 충분히 수렴한 후에야** OR loss의 정렬 효과가 발휘될 것으로 예상
-4. 현재 SLERP 파이프라인이 이 모델/데이터 조합에서는 **더 안정적인 결과**를 제공
+**모델 다운로드**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
-#### 실행 방법
+**Gradio 데모 서버:**
+```bash
+python3 demo/app.py  # http://localhost:7860
+```
+
+**GGUF/Ollama/vLLM 지원 현황:**
+
+| 구분 | 지원 여부 | 사유 |
+|------|----------|------|
+| **llama.cpp/GGUF** | ❌ 불가 | 순수 Mamba-2만 실험적 지원(CPU only), 하이브리드 미지원 |
+| **Ollama** | ❌ 불가 | llama.cpp 기반이므로 동일 제약 |
+| **vLLM** | ⚠️ 이론상 가능 | Mamba2ForCausalLM 지원하나, 커스텀 가중치 키 매핑 필요 (수일 작업) |
+| **Gradio (순수 Python)** | ✅ 작동 중 | `demo/app.py` |
+
+커스텀 하이브리드 아키텍처의 트레이드오프: SSM 상태(Mamba)와 KV 캐시(Attention)를 동시에 관리하는 표준이 GGUF에 없으며, `mamba_ssm` CUDA 커널이 llama.cpp에 미구현. NVIDIA Nemotron-H도 동일 문제 ([llama.cpp #20570](https://github.com/ggml-org/llama.cpp/issues/20570)).
+
+---
+
+### 향후 개선 방향
+
+1. **더 큰 규모의 preference 데이터** — 반복 vs 비반복 쌍을 명시적으로 포함
+2. **SFT 데이터 품질 점검** — hallucination 및 비정상 출력 원인 조사
+3. **모델 규모 확대** — 더 큰 compute budget 확보 시 7B+ 규모로 스케일업
+
+---
+
+## 부록: 실행 가이드
+
+### DPO/ORPO 파이프라인 실행
 
 ```bash
 # DPO Round 1 + Round 2 + SLERP Merge 전체 파이프라인
 bash train_3b_dpo_1gpu.sh
 
-# 또는 개별 실행
+# DPO 개별 실행
 python3 train/dpo.py \
     --sft_checkpoint checkpoints/3b_sft_v2/checkpoint-best \
     --dpo_data data/preference/combined_preference.jsonl \
@@ -1301,7 +1219,7 @@ python3 scripts/merge_checkpoints.py \
     --alpha 0.5
 ```
 
-#### 로그 모니터링
+### 로그 모니터링
 
 ```bash
 # DPO 학습 step별 loss/margin/lr
@@ -1311,38 +1229,10 @@ tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/train.log
 tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
 ```
 
-#### 버그 수정 이력
+### 버그 수정 이력
 
-- **LoRA device mismatch 수정** (`model/lora.py`): `LoRALinear.__init__`에서 `lora_A`/`lora_B` 파라미터가 CPU에 생성되어 GPU의 원본 레이어와 device 불일치 발생. `original.weight.device`/`dtype`을 사용하여 같은 device에 생성하도록 수정.
-- **nayohan preference 파서 추가** (`data/prepare_preference_combined.py`): `orig_response_A/B + orig_preference` 형식의 데이터셋 지원 추가 (기존에는 0건 파싱).
-
-#### 배포 및 추론
-
-**모델 다운로드**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
-
-**Gradio 데모 서버:**
-```bash
-python3 demo/app.py  # http://localhost:7860
-```
-
-**GGUF/Ollama 변환 — 현재 불가능:**
-
-이 모델은 **커스텀 하이브리드 Mamba-2 + Transformer** 아키텍처이므로, llama.cpp 기반의 GGUF/Ollama 변환이 불가능합니다.
-
-| 구분 | 지원 여부 | 사유 |
-|------|----------|------|
-| **llama.cpp/GGUF** | ❌ 불가 | 순수 Mamba-2만 실험적 지원(CPU only), 하이브리드 미지원 |
-| **Ollama** | ❌ 불가 | llama.cpp 기반이므로 동일 제약 |
-| **vLLM** | ⚠️ 이론상 가능 | Mamba2ForCausalLM 지원하나, 커스텀 가중치 키 매핑 필요 (수일 작업) |
-| **Gradio (순수 Python)** | ✅ 작동 중 | `demo/app.py` |
-
-**기술적 장벽:**
-- SSM 상태(Mamba)와 KV 캐시(Attention)를 동시에 관리하는 표준이 GGUF에 없음
-- `mamba_ssm` CUDA 커널이 llama.cpp에 미구현
-- llama.cpp는 정적 레이어 타입만 지원 — 하이브리드 디스패치 불가
-- NVIDIA Nemotron-H (동일 아키텍처 계열)도 같은 문제로 GGUF 변환에 어려움 ([llama.cpp #20570](https://github.com/ggml-org/llama.cpp/issues/20570))
-
-> **참고:** 이 제약은 커스텀 하이브리드 아키텍처를 선택한 트레이드오프입니다. 성능과 연구 유연성을 위해 포터빌리티를 일부 양보한 것이며, vLLM이나 순수 Python 추론으로 충분히 서빙 가능합니다.
+- **LoRA device mismatch** (`model/lora.py`): `lora_A`/`lora_B`가 CPU에 생성되어 GPU 레이어와 device 불일치. `original.weight.device`/`dtype`을 사용하도록 수정.
+- **nayohan preference 파서** (`data/prepare_preference_combined.py`): `orig_response_A/B + orig_preference` 형식 지원 추가 (기존 0건 파싱).
 
 ---
 

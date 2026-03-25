@@ -42,7 +42,15 @@ A **3-billion-parameter hybrid Mamba-2 + Transformer** language model implemente
 - [Development History](#development-history)
 - [Benchmark Results](#benchmark-results)
 - [SFT (Supervised Fine-Tuning)](#sft-supervised-fine-tuning)
-- [Post-SFT: Evaluation → DPO Pipeline](#post-sft-evaluation--dpo-pipeline)
+- [Model Alignment & Evaluation](#model-alignment--evaluation)
+  - [SFT Model Evaluation Results](#sft-model-evaluation-results)
+  - [Preference Data Preparation](#preference-data-preparation)
+  - [DPO (Direct Preference Optimization)](#dpo-direct-preference-optimization)
+  - [Comprehensive Evaluation Results](#comprehensive-evaluation-results)
+  - [ORPO Comparison Experiment (2026-03-25)](#orpo-comparison-experiment-2026-03-25)
+  - [Deployment & Inference](#deployment--inference)
+  - [Future Improvement Directions](#future-improvement-directions)
+- [Appendix: Execution Guide](#appendix-execution-guide)
 - [Related Projects](#related-projects)
 - [References](#references)
 - [Acknowledgements](#acknowledgements)
@@ -823,47 +831,35 @@ val_loss
 
 ---
 
-## Post-SFT: Evaluation → DPO Pipeline
+## Model Alignment & Evaluation
 
-After SFT v2 completion (step 65,000), this is the model quality evaluation and alignment phase via DPO (Direct Preference Optimization).
+After SFT v2 completion (step 65,000), this section covers model quality evaluation and alignment via DPO (Direct Preference Optimization).
 
-### SFT Model Evaluation (Phase 2: Generation Quality)
+### SFT Model Evaluation Results
 
-Completed Phase 2 (generation quality) of the 4-phase evaluation framework using `eval/evafrill_eval.py`.
+Completed Phase 2 (generation quality) of the 4-phase evaluation framework using `eval/evafrill_eval.py`. Phases 1, 3 were skipped (low priority / time constraints); Phase 4 (lm-eval) was aborted after 9 hours because `kmmlu` alone contains 269 subtasks (~167,000 problems), making the estimated runtime 12–18 hours on a single H100 MIG GPU — GPU time was reallocated to DPO training.
 
 **Evaluation environment**: H100 MIG 3g.40gb, batch_size=2
 
-| Phase | Description | Status | Notes |
-|-------|-------------|--------|-------|
-| Phase 1 (PPL) | Perplexity on 3b_val.bin | ⏭ Skipped | ~4.4 hours even with stride=2048; low priority |
-| Phase 2 (Generation) | 15 prompts × 4 decoding configs | ✅ Completed | ~2.5 hours |
-| Phase 3 (Calibration) | Calibration curve | ⏭ Skipped | |
-| Phase 4 (lm-eval) | 6 benchmarks (kmmlu, etc.) | ❌ Aborted | Stopped after 9 hours — see reason below |
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 (PPL) | Perplexity on 3b_val.bin | ⏭ Skipped (~4.4h, low priority) |
+| Phase 2 (Generation) | 15 prompts × 4 decoding configs | ✅ Completed (~2.5h) |
+| Phase 3 (Calibration) | Calibration curve | ⏭ Skipped |
+| Phase 4 (lm-eval) | 6 benchmarks (kmmlu, etc.) | ❌ Aborted (9h) |
 
-**Phase 4 abort reason:**
-
-lm-eval Phase 4 runs 6 benchmarks (`belebele_kor_Hang`, `global_mmlu_full_ko`, `hellaswag`, `arc_easy`, `arc_challenge`, `kmmlu`). Among these, `kmmlu` contains **269 subtasks, ~167,000 problems**, requiring processing of 195,000+ examples in total. At this scale on a single H100 MIG GPU (batch_size=2), the estimated runtime is **12–18 hours**. After 9 hours of execution, decided to abort and allocate the GPU to DPO training.
-
-**Phase 2 Generation Quality Results (Summary):**
-
-```
-Checkpoint: checkpoints/3b_sft_v2/checkpoint-best (step 65,059)
-Decoding configs: greedy, t0.7, t0.7_r1.2, t0.9_r1.1
-```
+**Phase 2 Generation Quality Results (checkpoint-best, step 65,059):**
 
 | Prompt | Greedy 3-gram Repetition Rate | Assessment |
 |--------|------------------------------:|-----------|
 | 대한민국의 수도는 | 96.85% | Same-phrase repetition loop |
 | 양자 컴퓨터란 | 96.85% | Severe repetition |
-| 건강한 식습관을 위해서는 | 59.45% | Relatively acceptable; generates nutrition-related content |
-| 인공지능이란 | 50.00% | Structured list format but repetition present |
-| 한국어는 세계에서 | 35.83% | Low repetition but Korean/English mixed corruption |
-| **Average** | **~76%** | **DPO needed to resolve repetition issue** |
+| 건강한 식습관을 위해서는 | 59.45% | Relatively acceptable |
+| 인공지능이란 | 50.00% | Structured list but repetition present |
+| 한국어는 세계에서 | 35.83% | Low repetition, Korean/English mixed corruption |
+| **Average** | **~76%** | **DPO needed to resolve repetition** |
 
-**Key findings:**
-- SFT model generates Korean text, but **severe repetition loops occur under greedy decoding**
-- Applying repetition penalty (1.2) improves output but is not a fundamental fix
-- **Preference learning via DPO is essential to suppress repetition**
+**Key findings:** SFT model generates Korean text, but severe repetition loops occur under greedy decoding. Repetition penalty (1.2) improves output but is not a fundamental fix — **preference learning via DPO is essential**.
 
 ### Preference Data Preparation
 
@@ -882,9 +878,9 @@ Used `data/prepare_preference_combined.py` to merge 7 Korean preference datasets
 
 ### DPO (Direct Preference Optimization)
 
-#### DPO vs ORPO: Rationale for Alignment Technique Selection
+#### DPO vs ORPO: Method Comparison & Selection Rationale
 
-Both DPO and ORPO are techniques that align the model using "chosen vs rejected" preference pairs, but they differ in implementation and when they are applied.
+Both DPO and ORPO align the model using "chosen vs rejected" preference pairs, but differ in implementation and training stage.
 
 | | DPO | ORPO |
 |---|-----|------|
@@ -894,25 +890,25 @@ Both DPO and ORPO are techniques that align the model using "chosen vs rejected"
 | **Training stage** | SFT → DPO (2 stages) | **Simultaneous with SFT** (1 stage) |
 | **Maturity** | Standard, widely validated | Relatively new (2024) |
 
-**Reasons for choosing DPO in this project:**
+**Reasons for choosing DPO:**
+1. **SFT is already complete** — ORPO's advantage is SFT+alignment simultaneously, but SFT v2 already converged at step 65,000; restarting would waste 5 days
+2. **VRAM disadvantage resolved via LoRA B-zeroing** — Temporarily zero lora_B to compute ref logprob; operates at 6.3 GB without model duplication
+3. **Nemotron-H paper uses DPO** — The architectural reference uses 2-round DPO + SLERP merge; same strategy followed here
 
-1. **SFT is already complete** — ORPO's biggest advantage is performing SFT + alignment simultaneously, but SFT v2 has already converged at step 65,000. Using ORPO would require re-running SFT from scratch, wasting 5 days of training
-2. **VRAM disadvantage resolved via LoRA B-zeroing** — The DPO drawback of "requiring a ref model and thus higher VRAM" is resolved by temporarily zeroing LoRA B to compute ref logprob. Operates at an actual 6.3 GB without model duplication
-3. **Nemotron-H paper uses DPO** — The architectural reference for this project, Nemotron-H, uses a 2-round DPO + SLERP merge pipeline, so the same strategy is followed
+> **Note:** If designing from scratch, ORPO could be more efficient by combining SFT + alignment in one pass. `train/orpo.py` already exists in the project for future experiments.
 
-> **Note:** If designing from scratch, ORPO could be more efficient by combining SFT + alignment in one pass. `train/orpo.py` already exists in the project and can be used in future experiments.
+#### Training Configuration
 
-#### Design Decisions
+**Design decisions:**
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| **Alignment technique** | DPO (instead of ORPO) | ORPO has no advantage with SFT already complete; Nemotron-H reference |
 | **Framework** | Native DPO (no TRL) | TRL requires HF AutoModel — not supported for Hybrid Mamba |
 | **Parameter efficiency** | LoRA (rank=32, alpha=64) | ~22 GB VRAM → fits H100 MIG 42 GB with room to spare |
-| **Reference model** | LoRA B-zeroing | Temporarily zero lora_B to compute ref logprob; no model duplication needed |
+| **Reference model** | LoRA B-zeroing | Temporarily zero lora_B to compute ref logprob; no model duplication |
 | **Checkpoint merging** | SLERP interpolation | Nemotron-H style: `slerp(W_sft, W_dpo, α=0.5)` to mitigate alignment tax |
 
-#### LoRA Adapter Configuration
+**LoRA adapter configuration:**
 
 ```
 Applied layers:    Attention (qkv_proj, out_proj) + Mamba-2 (in_proj, out_proj)
@@ -921,12 +917,10 @@ Trainable params:  21,438,464 (0.72% of total 2.97B)
 VRAM usage:        ~6.3 GB (15% of MIG 42 GB)
 ```
 
-#### 2-Round DPO Strategy (Nemotron-H Style)
+**2-Round DPO Strategy (Nemotron-H style):**
 
-Rationale for splitting DPO into two rounds:
-
-- **Round 1 (Exploration)**: Learns broad preference signals from the full 504K preference dataset. Higher β (0.1) and lr (5e-7) allow fast exploration of the preference direction.
-- **Round 2 (Exploitation)**: Fine-tunes on top of Round 1's merged checkpoint with lower β (0.05) and lr (1e-7). Lowering β reduces deviation from the reference model, **preventing over-alignment** — learning more preferences while preserving fluency and knowledge from SFT.
+- **Round 1 (Exploration)**: Learns broad preference signals from the full 504K dataset. Higher β (0.1) and lr (5e-7) allow fast exploration of the preference direction.
+- **Round 2 (Exploitation)**: Fine-tunes on top of Round 1's merged checkpoint with lower β (0.05) and lr (1e-7). Lowering β reduces deviation from the reference model, **preventing over-alignment** while preserving SFT fluency.
 
 | | Round 1 | Round 2 |
 |---|---------|---------|
@@ -938,97 +932,49 @@ Rationale for splitting DPO into two rounds:
 | **Warmup** | 100 steps | 50 steps |
 | **Batch** | bs=1 × grad_accum=16 = eff 16 | Same |
 
-#### DPO Round 1 Results (2026-03-23, Completed)
+#### Training Results
+
+**Round 1** (2026-03-23, 4h 33m, 6.3 GB VRAM):
 
 ```
-Started:     2026-03-23 10:49 UTC
-Completed:   2026-03-23 15:22 UTC (4h 33m)
-Speed:       ~5.5 s/step
-VRAM:        6.3 GB / 42 GB (stable throughout)
-
-Training trajectory:
   step   10 | loss 0.6941 | margin -0.006 | lr 5.0e-08  (warmup)
   step  100 | loss 0.6855 | margin  0.006 | lr 5.0e-07  (warmup complete)
   step  500 | loss 0.6543 | margin  0.120 | lr 4.93e-07
-  step 1500 | loss 0.6012 | margin  0.210 | lr 2.50e-07  (midpoint)
-  step 2500 | loss 0.5717 | margin  0.280 | lr 7.50e-08  (late phase)
+  step 1500 | loss 0.6012 | margin  0.210 | lr 2.50e-07
+  step 2500 | loss 0.5717 | margin  0.280 | lr 7.50e-08
   step 3000 | loss 0.5652 | margin  0.245 | lr 5.0e-08   (final)
-
-Checkpoint: checkpoints/3b_dpo_r1/checkpoint-0003000
-LoRA merged: checkpoints/3b_dpo_r1/checkpoint-merged
+  → Checkpoint: checkpoints/3b_dpo_r1/checkpoint-0003000
 ```
 
-**Interpretation:**
-- **Loss 0.693 → 0.565** (18.5% decrease): Clearly departed from random baseline — model learned to distinguish chosen from rejected
-- **Margin +0.245**: Chosen log-probability averages 0.245 higher than rejected — positive preference signal
-- Stable throughout: gnorm < 5, no NaN, constant VRAM — healthy training
+Loss 0.693 → 0.565 (18.5% decrease); margin +0.245 — model clearly learned to distinguish chosen from rejected. Stable throughout: gnorm < 5, no NaN.
 
-#### SLERP Checkpoint Merging — Mitigating Alignment Tax
-
-**What is alignment tax?** During DPO, the model learns preference alignment but partially loses knowledge and fluency acquired during SFT. For example, the model may produce less repetition after DPO but become less factually accurate — this tradeoff is called "alignment tax."
-
-**SLERP (Spherical Linear Interpolation)**: Merges two checkpoints (SFT, DPO) via **spherical interpolation** in weight space. Unlike ordinary linear interpolation (LERP), SLERP **preserves the direction** of weight vectors during interpolation, better retaining the learned characteristics of each checkpoint.
+**Round 2** (2026-03-23, 3h 2m, 6.3 GB VRAM):
 
 ```
-SLERP(W_sft, W_dpo, α=0.5):
-  - α=0: Pure SFT (no alignment, repetition issues remain)
-  - α=0.5: 50% SFT knowledge + 50% DPO alignment (Nemotron-H default)
-  - α=1: Pure DPO (maximum alignment, maximum alignment tax)
-```
-
-α=0.5 is the Nemotron-H paper's default, balancing SFT knowledge/fluency with DPO preference alignment.
-
-#### DPO Round 2 Results (2026-03-23, Completed)
-
-```
-Started:     2026-03-23 16:10 UTC
-Completed:   2026-03-23 19:12 UTC (3h 2m)
-Speed:       ~5.5 s/step
-VRAM:        6.3 GB / 42 GB (stable throughout)
-
-Training trajectory:
   step   50 | loss 0.6953 | margin  0.003 | lr 1.0e-07  (warmup complete)
   step  500 | loss 0.6880 | margin  0.027 | lr 8.9e-08
   step 1000 | loss 0.6906 | margin  0.008 | lr 5.7e-08
   step 1500 | loss 0.6884 | margin  0.017 | lr 2.5e-08
   step 2000 | loss 0.6886 | margin -0.005 | lr 1.0e-08  (final)
-
-Checkpoint: checkpoints/3b_dpo_r2/checkpoint-0002000
-LoRA merged: checkpoints/3b_dpo_r2/checkpoint-merged
+  → Checkpoint: checkpoints/3b_dpo_r2/checkpoint-0002000
 ```
 
-**Interpretation:**
-- **Loss 0.692 → 0.689** (0.5% change): Intentionally gradual — low β (0.05) and lr (1e-7) prevent over-alignment
-- **gnorm 1.6–2.2**: Much more stable than Round 1 (3–4) — conservative fine-tuning working as designed
-- While Round 1 learned the broad preference direction, Round 2 refines it delicately
+Loss 0.692 → 0.689 (0.5% change): intentionally gradual — low β (0.05) and lr (1e-7) prevent over-alignment. gnorm 1.6–2.2 (more stable than Round 1's 3–4).
 
-#### Post-DPO Next Steps: Candidates and Selection Rationale
+#### SLERP Merge & Final Model Selection
 
-After completing DPO Round 2, we evaluated 5 possible next steps:
+**What is alignment tax?** During DPO, the model learns preference alignment but partially loses SFT knowledge and fluency. SLERP mitigates this.
 
-| # | Candidate | Description | Decision |
-|---|-----------|-------------|----------|
-| 1 | **SLERP merge** | Spherically interpolate SFT + DPO at α=0.5 | ⭐ Adopted |
-| 2 | Use DPO directly | Use Round 2 merged checkpoint as final model | Comparison target |
-| 3 | Evaluate first | Measure DPO checkpoint quality before SLERP | ⭐ Adopted (combined) |
-| 4 | DPO Round 3 | Additional training round | ❌ Deferred |
-| 5 | Multi-α experiment | Try SLERP at α=0.3, 0.5, 0.7 | ❌ Deferred |
+**SLERP (Spherical Linear Interpolation)** merges two checkpoints via spherical interpolation in weight space. Unlike LERP, SLERP preserves the direction of weight vectors:
 
-**Final approach: "Evaluate first + SLERP → 3-way comparison"**
+```
+SLERP(W_sft, W_dpo, α=0.5):
+  α=0: Pure SFT (repetition issues remain)
+  α=0.5: 50% SFT + 50% DPO (Nemotron-H default)
+  α=1: Pure DPO (maximum alignment tax)
+```
 
-Rather than blindly applying SLERP, we evaluated all three checkpoints (SFT, DPO, SLERP) under identical conditions to make a data-driven final model selection.
-
-**Rationale for this approach:**
-1. **SLERP costs almost nothing** — CPU weight interpolation (~1 min), no downside to trying
-2. **Nemotron-H reference** — The paper prescribes 2-round DPO + SLERP merge as the standard pipeline
-3. **Alignment tax insurance** — Safety net against DPO losing SFT knowledge
-4. **Data-driven decision** — Only by comparing all three can we determine if SLERP actually helps
-
-#### 3-Checkpoint Comparison Results (2026-03-24)
-
-Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greedy decoding:
-
-**Per-prompt greedy 3-gram repetition rate (%):**
+**3-checkpoint comparison** (SFT vs DPO R2 vs SLERP α=0.5) on 15 prompts, greedy decoding (2026-03-24):
 
 | Prompt | SFT | DPO R2 | SLERP | Best |
 |--------|----:|-------:|------:|------|
@@ -1049,30 +995,29 @@ Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greed
 | 세계 2차 대전 이후 | 79.5 | 77.6 | 77.6 | DPO=SLERP |
 | **Average** | **79.8%** | **80.7%** | **74.5%** | **SLERP** |
 
-**Summary:**
-
 | Model | Avg repetition | Prompts with lowest repetition |
-|-------|---------------|-------------------------------|
+|-------|:-------------:|:------------------------------:|
 | SFT v2 | 79.8% | 1/15 |
 | DPO Round 2 | 80.7% | 1/15 |
 | **SLERP (α=0.5)** | **74.5%** | **7/15** |
 
-#### Final Model Selection and Analysis
+**Final model selected: SLERP (α=0.5)** — `checkpoints/3b_dpo/checkpoint-slerp`
 
-**Selected: SLERP (α=0.5)** — `checkpoints/3b_dpo/checkpoint-slerp`
+Rationale: lowest repetition in 7/15 prompts; "한국의 전통 음식" 90.9% → 39.4% (-51.5pp). Limitations: still far from 30% target (74.5%); 2 prompts regressed vs SFT; DPO-only was marginally worse than SFT (80.7% vs 79.8%). Root cause appears to be an architecture-level issue — greedy decoding repetition in hybrid Mamba-3B may have inherent limits.
 
-**Rationale:**
-- Lowest repetition rate in **7 of 15 prompts** (SFT: 1, DPO: 1)
-- Average repetition **74.5%** — lowest among all three checkpoints
-- Notable improvements on some prompts: "한국의 전통 음식" 90.9% → 39.4% (-51.5pp)
+### Comprehensive Evaluation Results
 
-**Limitations — honest assessment:**
-- Far short of the **30% target** (average 74.5%)
-- 2 prompts worse than SFT: "대한민국의 수도는" (+11.8pp), "한국 문학" (+11.4pp)
-- DPO-only checkpoint was **marginally worse** than SFT (80.7% vs 79.8%) — DPO alone did not solve the repetition problem
-- **Root cause**: Greedy decoding repetition in a 3B hybrid Mamba model may be an architecture-level issue — DPO/SLERP alone have inherent limits
+#### Generation Quality Comparison (Greedy Repetition)
 
-**lm-eval benchmark results (limit=100, kmmlu excluded, 0-shot):**
+Combined assessment across Phase 2 repetition and Phase 4 accuracy (limit=100):
+
+| Model | Repetition (↓) | lm-eval Accuracy (↑) | Overall |
+|-------|:--------------:|:-------------------:|---------|
+| SFT | 79.8% | 28.3% | Baseline |
+| DPO R2 | 80.7% | 28.3% | Repetition worse, knowledge retained |
+| **SLERP** | **74.5%** | **28.3%** | **Best repetition, same knowledge → Final** |
+
+**lm-eval 3-way comparison (limit=100, kmmlu excluded, 0-shot):**
 
 | Benchmark | SFT | DPO R2 | SLERP | Note |
 |-----------|----:|-------:|------:|------|
@@ -1082,29 +1027,9 @@ Evaluated SFT, DPO Round 2, and SLERP (α=0.5) on the same 15 prompts with greed
 | arc_challenge | 21.0% | 22.0% | 22.0% | |
 | global_mmlu_full_ko | 23.4% | 23.4% | 23.3% | Nearly identical |
 
-**Key finding**: Accuracy difference across all three checkpoints is **within 1%**. DPO and SLERP nearly perfectly preserved SFT knowledge — **alignment tax is negligible**. This demonstrates that the LoRA-based DPO + SLERP merge strategy is effective for knowledge retention.
+Accuracy difference across all three checkpoints is within 1% — **alignment tax is negligible**. LoRA-based DPO + SLERP effectively preserves knowledge.
 
-**SLERP final model benchmarks (limit=500, kmmlu excluded, 0-shot):**
-
-| Benchmark | Accuracy | Random | Note |
-|-----------|:--------:|:------:|------|
-| hellaswag | **34.6%** | 25.0% | English commonsense +9.6pp |
-| arc_easy | **32.0%** | 25.0% | Basic science +7.0pp |
-| global_mmlu_full_ko | 23.7% | 25.0% | Korean domain knowledge weak |
-| belebele_kor_Hang | 23.6% | 25.0% | Korean reading comprehension limited |
-| arc_challenge | 18.2% | 25.0% | Advanced reasoning insufficient |
-
-Limited by 3B model scale — only hellaswag/arc_easy show meaningful improvement over random. Korean benchmarks remain at random level — a fundamental constraint of model size and training data volume.
-
-**Combined assessment (Phase 2 repetition + Phase 4 accuracy):**
-
-| Model | Repetition (↓better) | Accuracy (↑better) | Overall |
-|-------|:--------------------:|:------------------:|---------|
-| SFT | 79.8% | 28.3% | Baseline |
-| DPO R2 | 80.7% | 28.3% | Repetition worse, knowledge retained |
-| **SLERP** | **74.5%** | **28.3%** | **Lowest repetition, same knowledge** → Final pick |
-
-#### Repetition Penalty Decoding Test (2026-03-24)
+#### Repetition Penalty Decoding Test
 
 Applying `repetition_penalty=1.2` at inference on the SLERP model **dramatically reduced repetition**:
 
@@ -1132,13 +1057,25 @@ Applying `repetition_penalty=1.2` at inference on the SLERP model **dramatically
   필수 아미노산으로 구성돼 있어 체내 흡수율이 높아 건강에 좋다...
 ```
 
-**Conclusion**: DPO/SLERP alone reduced repetition only to 74.5%, but **applying rep_penalty=1.2 at inference drops it to ~5%**. The model's learned knowledge and fluency are preserved while repetition is effectively suppressed. The "한국어는 세계에서" prompt still produces garbled output — likely an SFT training data quality issue.
+**Conclusion**: DPO/SLERP alone reduced repetition only to 74.5%, but **applying rep_penalty=1.2 at inference drops it to ~5%**. **Recommended inference settings**: `temperature=0.7, repetition_penalty=1.2` (t0.7_r1.2).
 
-**Recommended inference settings**: `temperature=0.7, repetition_penalty=1.2` (t0.7_r1.2)
+#### lm-eval Benchmarks
 
-#### Multi-α SLERP Experiment (2026-03-24)
+**SLERP final model (limit=500, kmmlu excluded, 0-shot):**
 
-Compared SLERP at α=0.3, 0.5, 0.7 on the same 5 prompts with greedy + rep_penalty=1.2:
+| Benchmark | Accuracy | Random | Note |
+|-----------|:--------:|:------:|------|
+| hellaswag | **34.6%** | 25.0% | English commonsense +9.6pp |
+| arc_easy | **32.0%** | 25.0% | Basic science +7.0pp |
+| global_mmlu_full_ko | 23.7% | 25.0% | Korean domain knowledge weak |
+| belebele_kor_Hang | 23.6% | 25.0% | Korean reading comprehension limited |
+| arc_challenge | 18.2% | 25.0% | Advanced reasoning insufficient |
+
+Limited by 3B model scale — only hellaswag/arc_easy show meaningful improvement over random. Korean benchmarks remain at random level — a fundamental constraint of model size and training data volume.
+
+#### Multi-α SLERP Experiment
+
+Compared SLERP at α=0.3, 0.5, 0.7 on the same 5 prompts with greedy + rep_penalty=1.2 (2026-03-24):
 
 | α | SFT weight | DPO weight | Avg repetition |
 |---|-----------|-----------|----------------|
@@ -1148,9 +1085,9 @@ Compared SLERP at α=0.3, 0.5, 0.7 on the same 5 prompts with greedy + rep_penal
 
 **Conclusion**: α=0.5 (Nemotron-H default) is optimal. A 50:50 balance between SFT and DPO is most effective at suppressing repetition.
 
-#### Qualitative Evaluation — Chat Template Conversation Test (2026-03-24)
+#### Qualitative Chat Template Evaluation
 
-Tested SLERP (α=0.5) model with the SFT chat template (`<|user|>\n...\n<|assistant|>\n`). Decoding: `temperature=0.7, repetition_penalty=1.2`.
+Tested SLERP (α=0.5) with the SFT chat template (`<|user|>\n...\n<|assistant|>\n`). Decoding: `temperature=0.7, repetition_penalty=1.2` (2026-03-24).
 
 ```
 USER: 김치를 만드는 방법을 간단히 알려주세요.
@@ -1169,56 +1106,38 @@ ASSISTANT: 건강에 좋은 운동은 여러 가지가 있습니다. 먼저, 심
   요가도 훌륭한 운동이 될 것입니다...
 ```
 
-**Assessment:**
-
 | Aspect | Rating | Notes |
 |--------|--------|-------|
-| **Repetition** | ✅ Good | Virtually no repetition with rep_penalty=1.2 |
+| **Repetition** | ✅ Good | Virtually none with rep_penalty=1.2 |
 | **Fluency** | ✅ Good | Natural Korean sentence generation |
-| **Instruction following** | ⚠️ Fair | Attempts to answer questions, but accuracy is low |
-| **Factual accuracy** | ❌ Poor | Hallucinations present (e.g., "Sejong reigned 100+ years") |
-| **Code generation** | ❌ Failed | Meaningless response to Fibonacci code request |
+| **Instruction following** | ⚠️ Fair | Attempts to answer but accuracy is low |
+| **Factual accuracy** | ❌ Poor | Hallucinations present |
+| **Code generation** | ❌ Failed | Meaningless response to Fibonacci request |
 
-**Summary**: Limited by 3B model scale — **fluent Korean generation** is achievable, but **factual accuracy and complex reasoning** (code generation, etc.) remain weak. This is a fundamental constraint of model size (3B) and training data volume (55B tokens).
+**Summary**: Limited by 3B scale — fluent Korean generation is achievable, but factual accuracy and complex reasoning remain weak.
 
-**Future improvement directions:**
-1. ~~Repetition penalty decoding~~ → ✅ Confirmed effective
-2. ~~Multi-α experiment~~ → ✅ α=0.5 confirmed optimal
-3. ~~Qualitative evaluation~~ → ✅ Completed
-4. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
-5. ~~ORPO retry~~ → ✅ Experiment completed (see below)
-6. **SFT data quality audit** — Investigate hallucination and garbled output root causes
-7. **Scale up** — Move to 7B+ models with larger compute budget
+### ORPO Comparison Experiment (2026-03-25)
 
----
+DPO failed to directly solve repetition (SFT 79.8% → DPO 80.7%, worsened). ORPO learns SFT+alignment simultaneously — we tested whether it overcomes the structural limitations of the separated pipeline.
 
-### ORPO Experiment: SFT→DPO→SLERP vs ORPO Comparison (2026-03-25)
+#### What is ORPO and Why Native Implementation?
 
-#### Motivation
-
-DPO failed to directly solve the repetition problem (SFT 79.8% → DPO 80.7%, actually worsened). ORPO learns SFT+alignment **simultaneously**, so we tested whether it can overcome the structural limitations of the separated pipeline.
-
-#### What is ORPO?
-
-ORPO (Odds Ratio Preference Optimization, Hong et al., 2024) combines SFT loss and preference loss in a single objective:
+ORPO (Odds Ratio Preference Optimization, Hong et al., 2024) combines SFT loss and preference loss in one objective:
 
 ```
 L_ORPO = L_SFT + λ * L_OR
-  L_SFT: CrossEntropy on chosen response (standard SFT)
-  L_OR:  -log(σ(log(odds_chosen / odds_rejected)))  (preference alignment)
+  L_SFT: CrossEntropy on chosen response
+  L_OR:  -log(σ(log(odds_chosen / odds_rejected)))
 ```
 
 | | DPO | ORPO |
 |---|---|---|
 | Reference model | Required | **Not needed** |
-| Training stages | SFT → DPO (2 stages) | **1 stage** |
-| Starting point | SFT model | **Pretrained model** |
+| Training stages | SFT → DPO (2 stages) | **1 stage from pretrained** |
 
-#### Why Native Implementation?
+Existing `train/orpo.py` uses TRL → requires HF AutoModel → incompatible with custom Mamba-2 hybrid. Native implementation was written (`train/orpo_native.py`), same reason as DPO.
 
-Existing `train/orpo.py` uses TRL → requires HF AutoModel → incompatible with custom Mamba-2 hybrid. Same reason as DPO — wrote **`train/orpo_native.py`** natively.
-
-#### Training Configuration
+#### Training Configuration & Results
 
 | Item | Value |
 |------|-------|
@@ -1228,24 +1147,20 @@ Existing `train/orpo.py` uses TRL → requires HF AutoModel → incompatible wit
 | LR | 5e-6 (10× DPO — starting from pretrained) |
 | λ (OR weight) | 1.0 |
 | LoRA | rank=32, alpha=64 |
-| VRAM | 6.2GB |
+| VRAM | 6.2 GB |
 | Duration | 12h 48m |
-
-#### Training Results
 
 ```
 Training trajectory:
   step     10 | sft 10.16 | or 0.909 | total 11.07  (start)
   step  1,000 | sft  6.25 | or 0.751 | total  7.00
-  step  3,000 | sft  5.99 | or 0.597 | total  6.59
   step  5,000 | sft  6.03 | or 0.565 | total  6.60
-  step  7,000 | sft  5.92 | or 0.555 | total  6.47
   step 10,000 | sft  5.85 | or 0.558 | total  6.41  (final)
 ```
 
-SFT loss -42.4%, OR loss -38.6% decrease.
+SFT loss -42.4%, OR loss -38.6%.
 
-#### SFT→DPO→SLERP vs ORPO Head-to-Head
+#### Head-to-Head Comparison
 
 | Metric | SLERP (α=0.5) | ORPO (10K) | Winner |
 |--------|:-------------:|:----------:|:------:|
@@ -1262,61 +1177,11 @@ SFT loss -42.4%, OR loss -38.6% decrease.
 
 #### Analysis and Conclusion
 
-**SLERP wins (under current settings).**
+**SLERP wins (under current settings).** Key reason for ORPO's weakness: insufficient SFT learning — ORPO's SFT loss stopped at 5.85 vs SFT v2's final val_loss of 1.79. 10,000 ORPO steps is far fewer than SFT's 65,000 steps, causing broken chat responses and higher greedy repetition. rep_penalty=1.2 slightly favors ORPO (3.7% vs 5.5%) — OR loss does contribute to repetition suppression.
 
-Key reason for ORPO's weakness: **insufficient SFT learning**. ORPO's SFT loss stopped at 5.85, while SFT v2's final val_loss was 1.79. This is because 10,000 ORPO steps is **far fewer** than SFT's 65,000 steps.
+**For a fair comparison**, ORPO needs 65,000+ steps (~5 days). Current 10,000 steps is an exploratory experiment. ORPO's time efficiency (12.8h vs 5d+8h) is attractive, but OR loss alignment only manifests after SFT loss converges sufficiently. The SLERP pipeline provides more stable results for this model/data combination.
 
-- **Chat responses are broken** because instruction-following ability hasn't formed yet
-- **Higher greedy repetition** because fluent Korean generation patterns are under-learned
-- **rep_penalty=1.2 slightly favors ORPO** (3.7% vs 5.5%): OR loss contributes to repetition suppression
-
-**For a fair comparison:**
-- ORPO needs **65,000+ steps** to match SFT v2 quality (~5 days)
-- Current 10,000 steps is an "exploratory experiment"
-
-**Insights:**
-1. ORPO's **time efficiency** is attractive (12.8h vs 5d+8h)
-2. But achieving equivalent SFT quality ultimately requires similar step counts
-3. **OR loss alignment effect will only manifest after SFT loss converges sufficiently**
-4. The SLERP pipeline provides **more stable results** for this model/data combination
-
-#### Execution Commands
-
-```bash
-# DPO Round 1 + Round 2 + SLERP Merge full pipeline
-bash train_3b_dpo_1gpu.sh
-
-# Or run individually
-python3 train/dpo.py \
-    --sft_checkpoint checkpoints/3b_sft_v2/checkpoint-best \
-    --dpo_data data/preference/combined_preference.jsonl \
-    --config configs/h100_mig/dpo_3b_1gpu.yaml \
-    --device cuda:0
-
-# SLERP checkpoint merging
-python3 scripts/merge_checkpoints.py \
-    --ckpt_a checkpoints/3b_sft_v2/checkpoint-best \
-    --ckpt_b checkpoints/3b_dpo_r1/checkpoint-merged \
-    --output checkpoints/3b_dpo/checkpoint-slerp \
-    --alpha 0.5
-```
-
-#### Log Monitoring
-
-```bash
-# DPO training step-wise loss/margin/lr
-tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/train.log
-
-# Full stdout (model loading, data parsing included)
-tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
-```
-
-#### Bug Fix History
-
-- **LoRA device mismatch fix** (`model/lora.py`): `lora_A`/`lora_B` parameters in `LoRALinear.__init__` were created on CPU, causing device mismatch with the original layer on GPU. Fixed by using `original.weight.device`/`dtype` to create them on the same device.
-- **nayohan preference parser added** (`data/prepare_preference_combined.py`): Added support for datasets in `orig_response_A/B + orig_preference` format (previously parsed 0 records).
-
-#### Deployment and Inference
+### Deployment & Inference
 
 **Model download**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
@@ -1343,6 +1208,56 @@ This model uses a **custom hybrid Mamba-2 + Transformer** architecture, making l
 - NVIDIA Nemotron-H (same architecture family) faces the same GGUF conversion issues ([llama.cpp #20570](https://github.com/ggml-org/llama.cpp/issues/20570))
 
 > **Note:** This is a deliberate tradeoff of choosing a custom hybrid architecture — performance and research flexibility over portability. The model can be served via vLLM or the pure Python inference server.
+
+### Future Improvement Directions
+
+1. ~~Repetition penalty decoding~~ → ✅ Confirmed effective
+2. ~~Multi-α experiment~~ → ✅ α=0.5 confirmed optimal
+3. ~~Qualitative evaluation~~ → ✅ Completed
+4. **Larger preference data** — Include explicit repetitive-vs-non-repetitive pairs
+5. ~~ORPO retry~~ → ✅ Experiment completed (see ORPO section above)
+6. **SFT data quality audit** — Investigate hallucination and garbled output root causes
+7. **Scale up** — Move to 7B+ models with larger compute budget
+
+---
+
+## Appendix: Execution Guide
+
+### DPO Pipeline Commands
+
+```bash
+# DPO Round 1 + Round 2 + SLERP Merge full pipeline
+bash train_3b_dpo_1gpu.sh
+
+# Or run individually
+python3 train/dpo.py \
+    --sft_checkpoint checkpoints/3b_sft_v2/checkpoint-best \
+    --dpo_data data/preference/combined_preference.jsonl \
+    --config configs/h100_mig/dpo_3b_1gpu.yaml \
+    --device cuda:0
+
+# SLERP checkpoint merging
+python3 scripts/merge_checkpoints.py \
+    --ckpt_a checkpoints/3b_sft_v2/checkpoint-best \
+    --ckpt_b checkpoints/3b_dpo_r1/checkpoint-merged \
+    --output checkpoints/3b_dpo/checkpoint-slerp \
+    --alpha 0.5
+```
+
+### Log Monitoring
+
+```bash
+# DPO training step-wise loss/margin/lr
+tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/train.log
+
+# Full stdout (model loading, data parsing included)
+tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
+```
+
+### Bug Fix History
+
+- **LoRA device mismatch fix** (`model/lora.py`): `lora_A`/`lora_B` parameters in `LoRALinear.__init__` were created on CPU, causing device mismatch with the original layer on GPU. Fixed by using `original.weight.device`/`dtype` to create them on the same device.
+- **nayohan preference parser added** (`data/prepare_preference_combined.py`): Added support for datasets in `orig_response_A/B + orig_preference` format (previously parsed 0 records).
 
 ---
 
