@@ -326,6 +326,45 @@ tail -F checkpoints/3b_final/train.log
 tail -F checkpoints/3b_final/monitor.log
 ```
 
+### 추론 예제 (Python)
+
+```python
+import torch
+from model.transformer import LLM
+from tokenizers import Tokenizer
+
+# 모델 로드 (SLERP 권장)
+model = LLM.from_pretrained("checkpoints/3b_dpo/checkpoint-slerp")
+model = model.to(device="cuda:0", dtype=torch.bfloat16)
+model.eval()
+
+tok = Tokenizer.from_file("tokenizer/korean_sp/tokenizer.json")
+
+# Chat template 적용
+prompt = "<|user|>\n인공지능이란 무엇인가요?\n<|assistant|>\n"
+ids = torch.tensor([tok.encode(prompt).ids], device="cuda:0")
+
+# 생성 (권장: temp=0.7, rep_penalty=1.2)
+with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+    for _ in range(256):
+        logits, _ = model(ids)
+        logits = logits[:, -1, :].float()
+        # Repetition penalty
+        for prev_id in set(ids[0].tolist()):
+            if logits[0, prev_id] > 0: logits[0, prev_id] /= 1.2
+            else: logits[0, prev_id] *= 1.2
+        probs = torch.softmax(logits / 0.7, dim=-1)
+        next_id = torch.multinomial(probs, 1)
+        ids = torch.cat([ids, next_id], dim=1)
+        if next_id.item() == 2: break  # EOS
+
+print(tok.decode(ids[0].tolist()))
+```
+
+> 💡 **Gradio 데모**: `python3 demo/app.py` 실행 후 http://localhost:7860 접속
+>
+> 📦 **HuggingFace**: [pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)에서 모델 다운로드
+
 ---
 
 ## 적용 기술 상세
