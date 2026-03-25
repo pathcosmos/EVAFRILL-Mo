@@ -1171,6 +1171,21 @@ ORPO 열세의 핵심 이유: SFT 학습 부족. ORPO의 SFT loss가 5.85에서 
 
 **모델 다운로드**: [🤗 pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
+HF Hub에 **7개 모델 버전** + LoRA 가중치 + preference 데이터 + 학습 설정/스크립트가 모두 업로드되어 있습니다:
+
+| 디렉토리 | 모델 | 설명 |
+|----------|------|------|
+| `slerp/` | ⭐ **최종 권장** | SFT + DPO SLERP 병합 (α=0.5) |
+| `pretrain/` | Pretrain | 319K steps, 55B tokens |
+| `sft-v2/` | SFT v2 | 65K steps, val_loss 1.79 |
+| `dpo-r1/` | DPO Round 1 | loss 0.693→0.565 |
+| `dpo-r2/` | DPO Round 2 | 보수적 미세 조정 |
+| `orpo/` | ORPO (실험) | SFT+정렬 동시 학습 |
+| `dpo-r3/` | DPO Round 3 (실험) | 반복 특화 |
+| `data/` | 재현 데이터 | preference 684K + 반복 특화 105개 |
+| `configs/` | 학습 설정 | SFT/DPO/ORPO YAML |
+| `scripts/` | 학습 코드 | dpo.py, orpo_native.py, lora.py 등 |
+
 **Gradio 데모 서버:**
 ```bash
 python3 demo/app.py  # http://localhost:7860

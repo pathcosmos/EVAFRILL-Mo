@@ -21,6 +21,21 @@
 
 **Model download**: [🤗 HuggingFace Hub](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
+The HF Hub contains **7 model versions** + LoRA weights + preference data + training configs/scripts for full reproducibility:
+
+| Directory | Model | Description |
+|-----------|-------|-------------|
+| `slerp/` | ⭐ **Recommended** | SFT + DPO SLERP merge (α=0.5) |
+| `pretrain/` | Pretrain | 319K steps, 55B tokens |
+| `sft-v2/` | SFT v2 | 65K steps, val_loss 1.79 |
+| `dpo-r1/` | DPO Round 1 | loss 0.693→0.565 |
+| `dpo-r2/` | DPO Round 2 | Conservative fine-tuning |
+| `orpo/` | ORPO (experimental) | SFT+alignment simultaneous |
+| `dpo-r3/` | DPO R3 (experimental) | Repetition-targeted |
+| `data/` | Reproduction data | 684K preference + 105 repetition pairs |
+| `configs/` | Training configs | SFT/DPO/ORPO YAMLs |
+| `scripts/` | Training code | dpo.py, orpo_native.py, lora.py, etc. |
+
 A **3-billion-parameter hybrid Mamba-2 + Transformer** language model implemented from scratch, inspired by the NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) architecture. Designed for Chinchilla-optimal pretraining over 60 hours on 7× NVIDIA B200 GPUs.
 
 </div>
