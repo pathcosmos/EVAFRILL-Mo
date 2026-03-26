@@ -40,7 +40,6 @@ NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) 아키텍처에서 영감�
 - [3B 하드웨어 제약 최적화](#3b-하드웨어-제약-최적화)
 - [학습 데이터](#학습-데이터)
 - [개발 히스토리](#개발-히스토리)
-- [벤치마크 결과](#벤치마크-결과)
 - [SFT (Supervised Fine-Tuning)](#sft-supervised-fine-tuning)
 - [모델 정렬 및 평가 (Model Alignment & Evaluation)](#모델-정렬-및-평가-model-alignment--evaluation)
   - [SFT 모델 평가 결과](#sft-모델-평가-결과)
@@ -51,6 +50,7 @@ NVIDIA [Nemotron-H](https://arxiv.org/abs/2504.03624) 아키텍처에서 영감�
   - [배포 및 추론](#배포-및-추론)
   - [향후 개선 방향](#향후-개선-방향)
 - [부록: 실행 가이드](#부록-실행-가이드)
+- [벤치마크 결과](#벤치마크-결과)
 - [관련 프로젝트](#관련-프로젝트)
 - [참조 논문](#참조-논문)
 - [감사의 글](#감사의-글)
@@ -109,8 +109,9 @@ Mamba-2 SSM 블록 사이에 Transformer 어텐션 레이어를 네트워크의 
 3B 레이어 배치 (26층):
 레이어 0-11:  Mamba-2 SSM ×12  ──┐
 레이어 12:    Attention (GQA)     │  전반부
-레이어 13-24: Mamba-2 SSM ×12  ──┘
-레이어 25:    Attention (GQA)        후반부
+레이어 13-23: Mamba-2 SSM ×11  ──┘
+레이어 24:    Attention (GQA)        후반부
+레이어 25:    Mamba-2 SSM ×1
 ```
 
 ### 설계 원칙
@@ -142,7 +143,7 @@ NVIDIA의 Nemotron-H/Nano는 8B/4B 규모, 수천 GPU, 수조 토큰 학습을 �
 | Attention을 1/3, 2/3 지점에 배치 | 동일하게 등간격 배치 (18-layer: 위치 6, 12) | ✅ 도입 |
 | Mamba 블록 내부에 SwiGLU FFN 추가 | `mamba_d_ffn` config 필드로 구현 (0=비활성, 하위호환) | ✅ 도입 |
 | Multi-head SSM with grouped heads | `mamba_n_groups=8`, `mamba_head_dim=64` | ✅ 도입 |
-| GQA (Grouped Query Attention) | `n_kv_heads=4` (비율 4:1) | ✅ 도입 |
+| GQA (Grouped Query Attention) | `n_kv_heads=8` (비율 3:1) | ✅ 도입 |
 | FP8 네이티브 학습 | TransformerEngine MXFP8BlockScaling | ✅ 도입 |
 | 대규모 d_state (128) | `mamba_d_state=128` | ✅ 도입 |
 | 청크 기반 selective scan | `mamba_chunk_size=256` | ✅ 도입 |
@@ -245,28 +246,36 @@ EVAFRILL-Mo/
 │   ├── trainer.py             # 학습 루프 (DDP, FP8, 체크포인팅)
 │   ├── sft.py                 # 지도 미세조정 (SFT)
 │   ├── dpo.py                 # DPO 선호도 학습 (Native, LoRA)
-│   ├── orpo.py                # ORPO 선호도 최적화
+│   ├── orpo.py                # ORPO 선호도 최적화 (TRL 기반)
+│   ├── orpo_native.py         # ORPO 네이티브 구현 (TRL 미사용, 실제 학습에 사용)
 │   └── utils.py               # Cosine 스케줄러, DDP 설정, 체크포인트 유틸
 │
 ├── data/                      # 데이터 파이프라인
 │   ├── dataset.py             # PackedDataset (memmap + MADV_WILLNEED 힌트)
 │   ├── prepare.py             # 토큰화 파이프라인
+│   ├── prepare_sft_data.py    # SFT 데이터 준비
+│   ├── filter_sft_v2.py       # SFT 데이터 품질 필터링
 │   ├── sft_dataset.py         # SFT 대화형 데이터셋
 │   ├── dpo_dataset.py         # DPO 선호도 쌍 데이터셋
 │   ├── prepare_preference_combined.py  # 7개 preference 소스 → 통합 JSONL
+│   ├── generate_repetition_preference.py  # 반복 억제 preference 데이터 생성
 │   └── *.bin                  # 바이너리 토큰 파일 (저장소에 미포함)
 │
 ├── eval/                      # 평가
 │   ├── evafrill_eval.py       # 종합 4-phase 평가 (PPL, 생성, 보정, lm-eval)
+│   ├── full_eval_pipeline.py  # 전체 평가 파이프라인 오케스트레이션
 │   ├── perplexity.py          # 퍼플렉시티 평가
 │   ├── generate.py            # 텍스트 생성 / 샘플링
-│   └── comprehensive_eval.py  # 종합 평가 도구
+│   ├── comprehensive_eval.py  # 종합 평가 도구
+│   └── report_generator.py    # 마크다운 평가 리포트 생성
 │
-├── scripts/
+├── scripts/                   # 실행, 모니터링, 배포 스크립트
 │   ├── merge_checkpoints.py   # SLERP/LERP 체크포인트 보간 (alignment tax 완화)
+│   ├── export_to_hf.py        # HuggingFace Hub 모델 내보내기 + push
+│   ├── convert_to_hf.py       # 네이티브 → HuggingFace 포맷 변환
+│   └── migrate_qkv_checkpoint.py  # QKV 체크포인트 레이아웃 마이그레이션
 │
 ├── configs/                   # YAML 학습 설정 파일
-├── scripts/                   # 실행, 모니터링, 배포 스크립트
 ├── benchmarks/                # 처리량 & 프로파일링 도구
 ├── tokenizer/                 # SentencePiece 토크나이저 학습
 ├── reports/                   # 평가 및 분석 리포트
@@ -274,6 +283,8 @@ EVAFRILL-Mo/
 ├── train_3b_sft_1gpu.sh       # H100 MIG SFT 런치 스크립트
 ├── train_3b_dpo_1gpu.sh       # H100 MIG DPO 런치 스크립트
 ├── train_3b_orpo_1gpu.sh      # H100 MIG ORPO 런치 스크립트
+├── requirements.txt           # Python 의존성 목록
+├── README.en.md               # 영문 README
 └── demo/app.py                # Gradio 데모 서버
 ```
 
@@ -388,7 +399,7 @@ print(tok.decode(ids[0].tolist()))
 | 기술 | 설명 | 적용 위치 |
 |------|------|-----------|
 | **FlashAttention-2** | Tri Dao의 IO-aware 어텐션 알고리즘. O(N)메모리로 정확한 어텐션 계산 | `model/attention.py:211` |
-| **GQA (Grouped Query Attention)** | 16개 쿼리 헤드, 4개 KV 헤드 (4:1 비율). KV 캐시 메모리 75% 절감 | `model/attention.py:77` |
+| **GQA (Grouped Query Attention)** | 24개 쿼리 헤드, 8개 KV 헤드 (3:1 비율). KV 캐시 메모리 67% 절감 | `model/attention.py:77` |
 | **RoPE (Rotary Positional Embedding)** | 회전 위치 임베딩으로 상대적 위치 정보 인코딩. `rope_theta=500000` | `model/layers.py:54`, `model/attention.py:39` |
 | **RMSNorm** | LayerNorm 대비 연산량 감소 (mean 계산 불필요). Pre-norm 구조 | `model/layers.py:27` |
 | **SwiGLU FFN** | Shazeer(2020)의 SwiGLU 게이트 활성화. `gate * silu(up)` 구조 | `model/layers.py:109` |
@@ -1422,6 +1433,9 @@ NVIDIA Nemotron-H 아키텍처에서 영감을 받아 밑바닥부터 직접 구
 | [SwiGLU Activation](https://arxiv.org/abs/2002.05202) | Shazeer, 2020 | 게이트 활성화 함수 |
 | [RoPE: Rotary Position Embedding](https://arxiv.org/abs/2104.09864) | Su et al., 2021 | 상대적 위치 인코딩 |
 | [Scaling Data-Constrained LMs](https://arxiv.org/abs/2305.16264) | Muennighoff et al., 2023 | 데이터 반복 학습의 효과 (최대 4 에포크) |
+| [DPO: Direct Preference Optimization](https://arxiv.org/abs/2305.18290) | Rafailov et al., 2023 | 보상 모델 없는 선호도 정렬 |
+| [ORPO: Monolithic Preference Optimization](https://arxiv.org/abs/2403.07691) | Hong et al., 2024 | SFT + 선호도 최적화 단일 단계 통합 |
+| [NEFTune](https://arxiv.org/abs/2310.05914) | Jain et al., 2023 | 임베딩 노이즈 주입으로 미세조정 품질 향상 |
 
 ---
 

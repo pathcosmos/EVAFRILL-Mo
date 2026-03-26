@@ -124,8 +124,9 @@ Transformer attention layers are sparsely placed at approximately the 1/2 point 
 3B Layer Layout (26 layers):
 Layer  0-11:  Mamba-2 SSM ×12  ──┐
 Layer 12:     Attention (GQA)     │  First half
-Layer 13-24:  Mamba-2 SSM ×12  ──┘
-Layer 25:     Attention (GQA)        Second half
+Layer 13-23:  Mamba-2 SSM ×11  ──┘
+Layer 24:     Attention (GQA)        Second half
+Layer 25:     Mamba-2 SSM ×1
 ```
 
 ### Design Principles
@@ -157,7 +158,7 @@ Instead, we **extracted (fragmented) only the core design principles** and scale
 | Attention placed at 1/3 and 2/3 depth | Same evenly-spaced placement (18-layer: positions 6, 12) | ✅ Adopted |
 | SwiGLU FFN added inside Mamba block | Implemented via `mamba_d_ffn` config field (0=disabled, backward-compatible) | ✅ Adopted |
 | Multi-head SSM with grouped heads | `mamba_n_groups=8`, `mamba_head_dim=64` | ✅ Adopted |
-| GQA (Grouped Query Attention) | `n_kv_heads=4` (ratio 4:1) | ✅ Adopted |
+| GQA (Grouped Query Attention) | `n_kv_heads=8` (ratio 3:1) | ✅ Adopted |
 | FP8 native training | TransformerEngine MXFP8BlockScaling | ✅ Adopted |
 | Large d_state (128) | `mamba_d_state=128` | ✅ Adopted |
 | Chunk-based selective scan | `mamba_chunk_size=256` | ✅ Adopted |
@@ -260,28 +261,36 @@ EVAFRILL-Mo/
 │   ├── trainer.py             # Training loop (DDP, FP8, checkpointing)
 │   ├── sft.py                 # Supervised fine-tuning (SFT)
 │   ├── dpo.py                 # DPO preference learning (Native, LoRA)
-│   ├── orpo.py                # ORPO preference optimization
+│   ├── orpo.py                # ORPO preference optimization (TRL-based)
+│   ├── orpo_native.py         # ORPO native implementation (no TRL, used for actual training)
 │   └── utils.py               # Cosine scheduler, DDP setup, checkpoint utils
 │
 ├── data/                      # Data pipeline
 │   ├── dataset.py             # PackedDataset (memmap + MADV_WILLNEED hint)
 │   ├── prepare.py             # Tokenization pipeline
+│   ├── prepare_sft_data.py    # SFT data preparation
+│   ├── filter_sft_v2.py       # SFT data quality filtering
 │   ├── sft_dataset.py         # SFT conversational dataset
 │   ├── dpo_dataset.py         # DPO preference pair dataset
 │   ├── prepare_preference_combined.py  # 7 preference sources → unified JSONL
+│   ├── generate_repetition_preference.py  # Repetition-suppression preference data generation
 │   └── *.bin                  # Binary token files (not included in repo)
 │
 ├── eval/                      # Evaluation
 │   ├── evafrill_eval.py       # Comprehensive 4-phase evaluation (PPL, generation, calibration, lm-eval)
+│   ├── full_eval_pipeline.py  # Full evaluation pipeline orchestration
 │   ├── perplexity.py          # Perplexity evaluation
 │   ├── generate.py            # Text generation / sampling
-│   └── comprehensive_eval.py  # Comprehensive evaluation tool
+│   ├── comprehensive_eval.py  # Comprehensive evaluation tool
+│   └── report_generator.py    # Markdown evaluation report generation
 │
-├── scripts/
+├── scripts/                   # Launch, monitoring, and deployment scripts
 │   ├── merge_checkpoints.py   # SLERP/LERP checkpoint interpolation (mitigates alignment tax)
+│   ├── export_to_hf.py        # HuggingFace Hub model export + push
+│   ├── convert_to_hf.py       # Native → HuggingFace format conversion
+│   └── migrate_qkv_checkpoint.py  # QKV checkpoint layout migration
 │
 ├── configs/                   # YAML training configuration files
-├── scripts/                   # Launch, monitoring, and deployment scripts
 ├── benchmarks/                # Throughput & profiling tools
 ├── tokenizer/                 # SentencePiece tokenizer training
 ├── reports/                   # Evaluation and analysis reports
@@ -289,6 +298,8 @@ EVAFRILL-Mo/
 ├── train_3b_sft_1gpu.sh       # H100 MIG SFT launch script
 ├── train_3b_dpo_1gpu.sh       # H100 MIG DPO launch script
 ├── train_3b_orpo_1gpu.sh      # H100 MIG ORPO launch script
+├── requirements.txt           # Python dependencies
+├── README.en.md               # English README
 └── demo/app.py                # Gradio demo server
 ```
 
@@ -403,7 +414,7 @@ A complete reference of the core techniques applied in this project.
 | Technique | Description | Location |
 |-----------|-------------|----------|
 | **FlashAttention-2** | Tri Dao's IO-aware attention algorithm. Exact attention computation in O(N) memory | `model/attention.py:211` |
-| **GQA (Grouped Query Attention)** | 16 query heads, 4 KV heads (4:1 ratio). 75% reduction in KV cache memory | `model/attention.py:77` |
+| **GQA (Grouped Query Attention)** | 24 query heads, 8 KV heads (3:1 ratio). 67% reduction in KV cache memory | `model/attention.py:77` |
 | **RoPE (Rotary Positional Embedding)** | Rotary positional encoding for relative position information. `rope_theta=500000` | `model/layers.py:54`, `model/attention.py:39` |
 | **RMSNorm** | Reduced computation vs. LayerNorm (no mean calculation). Pre-norm architecture | `model/layers.py:27` |
 | **SwiGLU FFN** | Shazeer (2020) SwiGLU gated activation. `gate * silu(up)` structure | `model/layers.py:109` |
@@ -1442,6 +1453,9 @@ Both projects share the same tokenizer (64K SentencePiece), training data pipeli
 | [SwiGLU Activation](https://arxiv.org/abs/2002.05202) | Shazeer, 2020 | Gated activation function |
 | [RoPE: Rotary Position Embedding](https://arxiv.org/abs/2104.09864) | Su et al., 2021 | Relative positional encoding |
 | [Scaling Data-Constrained LMs](https://arxiv.org/abs/2305.16264) | Muennighoff et al., 2023 | Effect of repeated training data (up to 4 epochs) |
+| [DPO: Direct Preference Optimization](https://arxiv.org/abs/2305.18290) | Rafailov et al., 2023 | Preference alignment without reward models |
+| [ORPO: Monolithic Preference Optimization](https://arxiv.org/abs/2403.07691) | Hong et al., 2024 | Unified SFT + preference optimization in a single stage |
+| [NEFTune](https://arxiv.org/abs/2310.05914) | Jain et al., 2023 | Embedding noise injection for fine-tuning quality improvement |
 
 ---
 
