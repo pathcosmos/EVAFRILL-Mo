@@ -391,6 +391,106 @@ print(tok.decode(ids[0].tolist()))
 >
 > 📦 **HuggingFace**: Download model from [pathcosmos/EVAFRILL-Mo-3B](https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B)
 
+### Download from HuggingFace and Run Inference
+
+> **GGUF/Ollama not supported**: The Mamba-2 hybrid architecture is incompatible with llama.cpp/GGUF format. Only PyTorch direct inference is available.
+
+**Step 1: Clone source code** (custom architecture modules required)
+
+```bash
+git clone https://github.com/pathcosmos/EVAFRILL-Mo
+cd EVAFRILL-Mo
+```
+
+**Step 2: Download checkpoints** (HuggingFace Hub, SLERP recommended)
+
+```bash
+git lfs install
+git clone https://huggingface.co/pathcosmos/EVAFRILL-Mo-3B
+
+# Required files: slerp/config.json (687B), slerp/model.safetensors (5.9GB), slerp/tokenizer.json (4.2MB)
+```
+
+**Step 3: Install dependencies**
+
+```bash
+pip install torch safetensors tokenizers PyYAML
+# Optional (GPU acceleration): pip install mamba_ssm causal_conv1d
+```
+
+**Step 4: Run inference** (direct safetensors loading)
+
+```python
+import json
+import torch
+from model.config import LMConfig
+from model.transformer import LLM
+from tokenizers import Tokenizer
+from safetensors.torch import load_file as load_safetensors
+
+CKPT = "path/to/EVAFRILL-Mo-3B/slerp"
+
+# Load config
+with open(f"{CKPT}/config.json") as f:
+    data = json.load(f)
+for k in ("model_type", "architectures", "_variant", "_description"):
+    data.pop(k, None)
+cfg = LMConfig(**data)
+cfg.use_flash_attn = False  # inference compatibility
+
+# Load model
+model = LLM(cfg)
+state = load_safetensors(f"{CKPT}/model.safetensors", device="cpu")
+model.load_state_dict(state, strict=False)
+model = model.to(device="cuda:0", dtype=torch.bfloat16)
+model.eval()
+
+# Tokenizer
+tok = Tokenizer.from_file(f"{CKPT}/tokenizer.json")
+
+# Generate
+prompt = "<|user|>\nWhat is artificial intelligence?\n<|assistant|>\n"
+ids = torch.tensor([tok.encode(prompt).ids], device="cuda:0")
+
+with torch.no_grad():
+    for _ in range(256):
+        logits, _ = model(ids)
+        logits = logits[:, -1, :].float()
+        for prev_id in set(ids[0].tolist()):
+            if logits[0, prev_id] > 0: logits[0, prev_id] /= 1.2
+            else: logits[0, prev_id] *= 1.2
+        probs = torch.softmax(logits / 0.7, dim=-1)
+        next_id = torch.multinomial(probs, 1)
+        ids = torch.cat([ids, next_id], dim=1)
+        if next_id.item() == tok.token_to_id("</s>"): break
+
+print(tok.decode(ids[0].tolist()))
+```
+
+**Alternative: Use the evaluation framework runner**
+
+The `evafrill_runner.py` in [frankenstallm_test](https://github.com/pathcosmos/frankenstallm_test) wraps the above process into a simple API:
+
+```python
+from eval_framework.evafrill_runner import generate, unload_model
+
+result = generate("Hello, please introduce yourself.")
+print(result["response"])
+print(f"Speed: {result['tokens_per_sec']:.1f} TPS")
+
+unload_model()  # free VRAM
+```
+
+> See the [frankenstallm_test README](https://github.com/pathcosmos/frankenstallm_test#evafrill-mo-모델-설정-pytorch-직접-추론) for setup instructions.
+
+**System Requirements**
+
+| Item | Minimum | Recommended |
+|------|---------|-------------|
+| GPU VRAM | 8 GB (BF16) | 16 GB+ |
+| RAM | 16 GB | 32 GB |
+| CPU inference | Possible (~0.5 TPS) | GPU recommended (~4.8 TPS) |
+
 ---
 
 ## Technical Details
