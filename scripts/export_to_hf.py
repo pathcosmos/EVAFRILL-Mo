@@ -199,6 +199,28 @@ print(tokenizer.decode(output[0], skip_special_tokens=False))
 
 ---
 
+## Acknowledgment / 감사의 글
+
+이 프로젝트는 **과학기술정보통신부**의 **「첨단 GPU 활용 지원 사업」** (과학기술정보통신부 공고 제2025-1068호)을 통해 제공된 GPU 컴퓨팅 자원을 활용하여 수행되었습니다.
+
+> **국가 AI컴퓨팅자원 지원포털**: [https://aiinfrahub.kr](https://aiinfrahub.kr)
+>
+> - 주관: 과학기술정보통신부 (MSIT), 정보통신산업진흥원 (NIPA)
+> - 운영: 한국정보통신진흥협회 (KAIT)
+
+대한민국 정부의 AI 인프라 지원 사업 덕분에 7× NVIDIA B200 GPU 환경에서 한국어 3B 하이브리드 Mamba-Transformer 모델을 처음부터 학습할 수 있었습니다. 국가 차원의 AI 컴퓨팅 자원 지원에 깊이 감사드립니다.
+
+This project was conducted using GPU computing resources provided through the **"Advanced GPU Utilization Support Program"** (MSIT Notice No. 2025-1068) by the **Ministry of Science and ICT (MSIT)** of the Republic of Korea.
+
+> **National AI Computing Resource Support Portal**: [https://aiinfrahub.kr](https://aiinfrahub.kr)
+>
+> - Organized by: Ministry of Science and ICT (MSIT), National IT Industry Promotion Agency (NIPA)
+> - Operated by: Korea Association of Information & Telecommunication (KAIT)
+
+We are deeply grateful for the national-level AI computing infrastructure support from the Korean government, which made it possible to train a Korean 3B hybrid Mamba-Transformer model from scratch on 7× NVIDIA B200 GPUs.
+
+---
+
 ## License
 
 [MIT](LICENSE)

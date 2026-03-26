@@ -1447,6 +1447,15 @@ Both projects share the same tokenizer (64K SentencePiece), training data pipeli
 
 ## Acknowledgments
 
+This project was conducted using GPU computing resources provided through the **"Advanced GPU Utilization Support Program"** (MSIT Notice No. 2025-1068) by the **Ministry of Science and ICT (MSIT)** of the Republic of Korea.
+
+> **National AI Computing Resource Support Portal**: [https://aiinfrahub.kr](https://aiinfrahub.kr)
+>
+> - Organized by: Ministry of Science and ICT (MSIT), National IT Industry Promotion Agency (NIPA)
+> - Operated by: Korea Association of Information & Telecommunication (KAIT)
+
+We are deeply grateful for the national-level AI computing infrastructure support from the Korean government, which made it possible to train a Korean 3B hybrid Mamba-Transformer model from scratch on 7× NVIDIA B200 GPUs.
+
 - **NVIDIA Nemotron-H** — Inspiration for the hybrid Mamba-Transformer architecture design
 - **Mamba-2** (Dao & Gu, 2024) — Foundation for the structured state space model
 - **Chinchilla Scaling Law** (Hoffmann et al., 2022) — Criterion for optimal training compute allocation

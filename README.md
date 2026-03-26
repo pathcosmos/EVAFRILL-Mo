@@ -1427,6 +1427,15 @@ NVIDIA Nemotron-H 아키텍처에서 영감을 받아 밑바닥부터 직접 구
 
 ## 감사의 글
 
+이 프로젝트는 **과학기술정보통신부**의 **「첨단 GPU 활용 지원 사업」** (과학기술정보통신부 공고 제2025-1068호)을 통해 제공된 GPU 컴퓨팅 자원을 활용하여 수행되었습니다.
+
+> **국가 AI컴퓨팅자원 지원포털**: [https://aiinfrahub.kr](https://aiinfrahub.kr)
+>
+> - 주관: 과학기술정보통신부 (MSIT), 정보통신산업진흥원 (NIPA)
+> - 운영: 한국정보통신진흥협회 (KAIT)
+
+대한민국 정부의 AI 인프라 지원 사업 덕분에 7× NVIDIA B200 GPU 환경에서 한국어 3B 하이브리드 Mamba-Transformer 모델을 처음부터 학습할 수 있었습니다. 국가 차원의 AI 컴퓨팅 자원 지원에 깊이 감사드립니다.
+
 - **NVIDIA Nemotron-H** — 하이브리드 Mamba-Transformer 아키텍처 설계의 영감
 - **Mamba-2** (Dao & Gu, 2024) — 구조화된 상태 공간 모델의 기반
 - **Chinchilla 스케일링 법칙** (Hoffmann et al., 2022) — 최적 학습 compute 배분 기준
