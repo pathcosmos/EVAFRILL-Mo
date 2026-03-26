@@ -1392,7 +1392,7 @@ tail -f /root/taketimes/llm/EVAFRILL-Mo/checkpoints/3b_dpo_r1/stdout.log
 
 ## 관련 프로젝트
 
-- **[FRANKENSTALLM](https://github.com/pathcosmos/FRANKENSTALLM)** — EVAFRILL-Mo의 전신. 순수 Transformer decoder-only LLM으로 시작한 프로젝트. 한국어+영어+코드+수학 커스텀 토크나이저, DDP 학습 파이프라인 등 기반 인프라를 구축한 프로젝트입니다. EVAFRILL-Mo는 여기서 하이브리드 Mamba-2 + Transformer 아키텍처로 진화했습니다.
+- **[FRANKENSTALLM](https://github.com/pathcosmos/FRANKENSTALLM)** | [🤗 HuggingFace](https://huggingface.co/pathcosmos/frankenstallm) — EVAFRILL-Mo의 전신. 순수 Transformer decoder-only LLM으로 시작한 프로젝트. 한국어+영어+코드+수학 커스텀 토크나이저, DDP 학습 파이프라인 등 기반 인프라를 구축한 프로젝트입니다. EVAFRILL-Mo는 여기서 하이브리드 Mamba-2 + Transformer 아키텍처로 진화했습니다.
 
 NVIDIA Nemotron-H 아키텍처에서 영감을 받아 밑바닥부터 직접 구현한 3B 하이브리드 모델입니다. FRANKENSTALLM이 순수 Transformer 기반이라면, EVAFRILL-Mo는 Mamba-2 SSM + 희소 Transformer 어텐션 하이브리드 구조를 채택했습니다.
 

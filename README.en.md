@@ -1412,7 +1412,7 @@ This occurs because the selective scan fully materializes intermediate states in
 
 ## Related Projects
 
-- **[FRANKENSTALLM](https://github.com/pathcosmos/FRANKENSTALLM)** — The predecessor to EVAFRILL-Mo. A project that began as a pure Transformer decoder-only LLM. Built foundational infrastructure including a custom Korean+English+code+math tokenizer and DDP training pipeline. EVAFRILL-Mo evolved from this into a hybrid Mamba-2 + Transformer architecture.
+- **[FRANKENSTALLM](https://github.com/pathcosmos/FRANKENSTALLM)** | [🤗 HuggingFace](https://huggingface.co/pathcosmos/frankenstallm) — The predecessor to EVAFRILL-Mo. A project that began as a pure Transformer decoder-only LLM. Built foundational infrastructure including a custom Korean+English+code+math tokenizer and DDP training pipeline. EVAFRILL-Mo evolved from this into a hybrid Mamba-2 + Transformer architecture.
 
 A 3B hybrid model implemented from scratch, inspired by the NVIDIA Nemotron-H architecture. While FRANKENSTALLM is pure Transformer-based, EVAFRILL-Mo adopts a Mamba-2 SSM + sparse Transformer attention hybrid structure.
 
