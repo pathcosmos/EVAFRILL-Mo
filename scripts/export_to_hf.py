@@ -82,10 +82,10 @@ Korean-dominant multilingual text.
 | Max sequence length | 4 096 |
 | RoPE theta | 500 000 |
 
-The layer pattern places attention blocks at positions 9 and 18 (zero-indexed),
-mirroring the Nemotron-H 8B dense design scaled to 3B parameters. All other
-layers use Mamba-2 with SwiGLU FFN (mamba_d_ffn = 4 608). Attention layers use
-full SwiGLU FFN (d_ffn = 9 216).
+The layer pattern places attention blocks at positions 12 and 24 (zero-indexed),
+distributing them at approximately the 1/2 point and near the end of the network.
+All other layers use Mamba-2 with SwiGLU FFN (mamba_d_ffn = 4 608). Attention
+layers use full SwiGLU FFN (d_ffn = 9 216).
 
 ---
 
